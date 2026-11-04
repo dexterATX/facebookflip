@@ -1,0 +1,2274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sister Protects</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Find her comments, tags and mentions in the Instagram accounts she follows, using your own screenshots.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: one calm column under a sticky header with four step tabs.
+   Screenshots are treated like a contact sheet marked up with a red grease pencil. */
+:root {
+  --paper: #f5f6f3;
+  --card: #ffffff;
+  --sunk: #eaede8;
+  --ink: #17212b;
+  --ink-2: #4b5765;
+  --rule: #d6dbdf;
+  --accent: #1f4e79;
+  --on-accent: #ffffff;
+  --focus: rgba(31, 78, 121, 0.45);
+  --red: #c4321c;
+  --red-wash: #fbe2db;
+  --amber: #8a5600;
+  --amber-wash: #ffeeb8;
+  --green: #2c6a4c;
+  --green-wash: #e0efe6;
+  --scrim: rgba(8, 12, 16, 0.92);
+  --shadow: rgba(10, 20, 30, 0.22);
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #11161b; --card: #182027; --sunk: #0c1115; --ink: #e9edf0; --ink-2: #a3aeb8; --rule: #2a343d;
+    --accent: #8fbbe9; --on-accent: #0c1824; --focus: rgba(143, 187, 233, 0.5);
+    --red: #ff7d68; --red-wash: #3d1d17; --amber: #f3bd55; --amber-wash: #3b2c0d; --green: #7ccaa0; --green-wash: #173024;
+    --scrim: rgba(4, 7, 10, 0.94); --shadow: rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #11161b; --card: #182027; --sunk: #0c1115; --ink: #e9edf0; --ink-2: #a3aeb8; --rule: #2a343d;
+  --accent: #8fbbe9; --on-accent: #0c1824; --focus: rgba(143, 187, 233, 0.5);
+  --red: #ff7d68; --red-wash: #3d1d17; --amber: #f3bd55; --amber-wash: #3b2c0d; --green: #7ccaa0; --green-wash: #173024;
+  --scrim: rgba(4, 7, 10, 0.94); --shadow: rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--font-body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--paper); }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--accent); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.wrap { width: 100%; max-width: 880px; margin-inline: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+/* Header */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 6; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.top-in { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px 14px; padding-block: 12px 8px; }
+.brand { display: flex; align-items: center; gap: 8px; font: 800 1.3rem/1 var(--font-display); letter-spacing: -0.015em; white-space: nowrap; }
+.mark { width: 36px; height: 24px; flex: none; }
+.mark ellipse { fill: none; stroke: var(--red); stroke-width: 2.6; stroke-linecap: round; stroke-dasharray: 88 6; }
+.mark circle { fill: var(--ink); }
+.top-status { margin: 0; justify-self: end; text-align: right; color: var(--ink-2); font-size: 0.875rem; min-width: 0; overflow-wrap: anywhere; }
+.top-status .handle { color: var(--ink); }
+.meter { grid-column: 1 / -1; height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
+.meter span { display: block; height: 100%; width: 0; background: var(--green); transition: width 0.4s ease; }
+.tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; }
+.tabs button { appearance: none; background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 2px 9px; font: 700 0.95rem/1.2 var(--font-body); color: var(--ink-2); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs button:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
+.tabs .n { font: 600 0.72rem/1 var(--font-mono); border: 1.5px solid var(--rule); border-radius: 50%; width: 1.35rem; height: 1.35rem; display: inline-grid; place-items: center; flex: none; }
+.tabs [aria-selected="true"] .n { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.count { font: 600 0.72rem/1 var(--font-mono); background: var(--sunk); color: var(--ink); padding: 3px 6px; border-radius: 999px; }
+.count:empty { display: none; }
+.count.alert { background: var(--red); color: var(--card); }
+@media (max-width: 560px) {
+  .top-in { grid-template-columns: minmax(0, 1fr); }
+  .top-status { justify-self: start; text-align: left; }
+}
+@media (max-width: 430px) {
+  .tabs .n { display: none; }
+  .tabs button { font-size: 0.9rem; gap: 4px; }
+}
+
+/* Type and blocks */
+main { padding-bottom: 72px; }
+.panel { display: grid; gap: 28px; padding-block: 24px 32px; }
+.panel > * { min-width: 0; }
+.panel > :empty { display: none; }
+h1 { font: 800 clamp(1.75rem, 6vw, 2.5rem)/1.06 var(--font-display); letter-spacing: -0.025em; margin: 0; text-wrap: balance; max-width: 18ch; }
+h2 { font: 800 1.35rem/1.15 var(--font-display); letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+h3 { font: 700 1.05rem/1.3 var(--font-display); margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--ink-2); max-width: 62ch; font-size: 1.05rem; }
+.intro { display: grid; gap: 12px; }
+.sec-head { display: grid; gap: 6px; }
+.stack { display: grid; gap: 12px; }
+.stack > * { min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.row.spread { justify-content: space-between; }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); padding: 18px; }
+.hint { color: var(--ink-2); font-size: 0.92rem; }
+.strong { font-weight: 700; }
+.t-red { color: var(--red); }
+.t-amber { color: var(--amber); }
+.handle { font-family: var(--font-mono); font-weight: 600; font-size: 0.95em; overflow-wrap: anywhere; }
+.banner { padding: 12px 14px; border-radius: 8px; background: var(--amber-wash); color: var(--ink); }
+.banner.bad { background: var(--red-wash); }
+
+/* Forms */
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 18px; }
+.field { display: grid; gap: 6px; }
+label, .label { font-weight: 700; }
+.field .hint { margin-top: -2px; }
+.opt { font-weight: 400; color: var(--ink-2); font-size: 0.85rem; }
+input[type="text"], input[type="search"], textarea, select {
+  width: 100%; min-height: 46px; padding: 11px 12px; border: 1px solid var(--rule); border-radius: 8px;
+  background: var(--card); color: var(--ink); font-size: 1rem;
+}
+textarea { min-height: 72px; resize: vertical; line-height: 1.4; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+.at-input { display: flex; align-items: stretch; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); }
+.at-input span { padding-left: 12px; display: grid; place-items: center; color: var(--ink-2); font-family: var(--font-mono); }
+.at-input input { border: 0; padding-left: 3px; font-family: var(--font-mono); background: transparent; }
+.at-input input:focus-visible { outline: none; }
+.at-input:focus-within { outline: 3px solid var(--focus); outline-offset: 1px; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; cursor: pointer; }
+.check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 16px;
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--card); color: var(--ink);
+  font: 700 0.95rem/1.15 var(--font-body); cursor: pointer; text-decoration: none; text-align: center;
+}
+.btn:hover { border-color: var(--ink-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.small { min-height: 38px; padding: 7px 12px; font-size: 0.88rem; }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--ink-2); }
+.btn.quiet:hover { border-color: var(--rule); }
+.btn.danger { color: var(--red); }
+.btn.danger-solid { background: var(--red); border-color: var(--red); color: var(--card); }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.btn[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.btn:focus-visible, .link:focus-visible, .file-btn:focus-within, .chip:focus-visible, .acct-main:focus-visible, .thumb-btn:focus-visible, .shot-img:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.file-btn { position: relative; }
+.link { appearance: none; background: none; border: 0; padding: 6px 0; min-height: 34px; color: var(--accent); font: 700 0.92rem/1.2 var(--font-body); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 600 0.85rem/1 var(--font-mono); padding: 7px 10px; border-radius: 999px; background: var(--sunk); color: var(--ink); border: 1px solid transparent; }
+button.chip { cursor: pointer; }
+button.chip[aria-pressed="false"] { text-decoration: line-through; color: var(--ink-2); background: transparent; border-color: var(--rule); }
+
+/* How it works */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; counter-reset: step; }
+.steps li { display: grid; grid-template-columns: 2.1rem minmax(0, 1fr); gap: 12px; align-items: start; }
+.steps li::before { counter-increment: step; content: counter(step); font: 600 0.9rem/1 var(--font-mono); width: 2.1rem; height: 2.1rem; display: grid; place-items: center; border: 1.5px solid var(--ink); border-radius: 50%; }
+.steps b { display: block; margin-bottom: 2px; }
+.steps p { color: var(--ink-2); }
+.limits ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 8px; color: var(--ink-2); }
+.limits li::marker { color: var(--red); }
+.example { position: relative; }
+.example-tag { position: absolute; top: -10px; right: 12px; z-index: 1; font: 700 0.72rem/1 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; background: var(--ink); color: var(--paper); padding: 5px 8px; border-radius: 4px; }
+.mock-shot { width: 92px; aspect-ratio: 9 / 16; border-radius: 6px; border: 1px solid var(--rule); background: var(--sunk); padding: 12px 9px; display: grid; align-content: start; gap: 9px; }
+.mock-shot i { display: block; height: 6px; border-radius: 3px; background: var(--rule); }
+.mock-shot i:nth-child(2n) { width: 72%; }
+.mock-shot i.hit { position: relative; background: var(--ink-2); }
+.mock-shot i.hit::after { content: ""; position: absolute; inset: -7px -6px; border: 2px solid var(--red); border-radius: 50%; transform: rotate(-3deg); }
+
+/* Status lines */
+.status-line { display: flex; gap: 10px; align-items: baseline; }
+.status-line::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--ink-2); transform: translateY(-1px); }
+.status-line[data-tone="good"]::before { background: var(--green); }
+.status-line[data-tone="warn"]::before { background: var(--amber); }
+.status-line[data-tone="bad"]::before { background: var(--red); }
+
+/* Accounts */
+.add-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.add-one { display: flex; gap: 8px; flex: 1 1 240px; min-width: 0; }
+.add-one input { min-width: 0; font-family: var(--font-mono); }
+.list-tools { display: grid; gap: 10px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.accts { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.acct { border-bottom: 1px solid var(--rule); }
+.acct-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.acct-main { appearance: none; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 3px 10px; align-items: center; padding: 13px 0; min-width: 0; }
+.acct-main .handle { font-size: 1rem; }
+.sub { grid-column: 2; color: var(--ink-2); font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.st { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font: 700 0.75rem/1 var(--font-body); }
+.st.todo { border: 2px solid var(--rule); }
+.st.clear { background: var(--green); color: var(--card); }
+.st.found { background: var(--red); color: var(--card); }
+.acct-more { padding: 0 0 16px 32px; display: grid; gap: 12px; }
+.empty { color: var(--ink-2); padding: 18px 0; }
+
+/* Scan */
+.drop { display: grid; place-items: center; text-align: center; gap: 4px; padding: 28px 16px; border: 2px dashed var(--rule); border-radius: var(--r); cursor: pointer; background: var(--paper); font-weight: 400; }
+.drop strong { font: 800 1.2rem/1.2 var(--font-display); color: var(--accent); }
+.drop span { color: var(--ink-2); font-size: 0.92rem; }
+.drop.over { border-color: var(--accent); background: var(--sunk); }
+.drop:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
+.bar { height: 8px; background: var(--sunk); border-radius: 4px; overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.3s ease; }
+.shots { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.shot { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 12px; padding: 10px; background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); }
+.shot-img { appearance: none; padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 5px; }
+.shot-img img { display: block; width: 60px; height: 104px; object-fit: cover; object-position: top; border-radius: 5px; background: var(--sunk); }
+.shot-body { display: grid; gap: 3px; align-content: start; min-width: 0; }
+.shot-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.shot .state { font-weight: 700; }
+.shot.hit .state { color: var(--red); }
+.shot.possible .state { color: var(--amber); }
+.shot.none .state, .shot.wait .state { color: var(--ink-2); }
+.shot.err .state { color: var(--amber); }
+.shot-text { overflow-wrap: anywhere; }
+.shot-file { color: var(--ink-2); font-size: 0.82rem; overflow-wrap: anywhere; }
+.shot-acts { display: flex; flex-wrap: wrap; gap: 0 16px; }
+details summary { cursor: pointer; color: var(--ink-2); font-size: 0.88rem; padding: 4px 0; }
+pre.read { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 0.8rem/1.45 var(--font-mono); max-height: 260px; overflow: auto; background: var(--sunk); padding: 10px; border-radius: 6px; }
+.tips ul { margin: 10px 0 0; padding-left: 1.2rem; display: grid; gap: 8px; color: var(--ink-2); }
+.tips summary { font: 700 1rem/1.3 var(--font-body); color: var(--ink); }
+
+/* Findings */
+.groups { display: grid; gap: 26px; }
+.group { display: grid; gap: 10px; }
+.group-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.finding { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 14px; padding: 14px; background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); }
+.thumb-btn { appearance: none; padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 6px; align-self: start; }
+.thumb { display: block; width: 104px; aspect-ratio: 9 / 16; object-fit: cover; object-position: top; border-radius: 6px; border: 1px solid var(--rule); background: var(--sunk); }
+.finding-body { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { font: 700 0.78rem/1 var(--font-body); padding: 5px 8px; border-radius: 999px; letter-spacing: 0.01em; }
+.pill.match { background: var(--red); color: var(--card); }
+.pill.possible { background: var(--amber-wash); color: var(--amber); }
+.pill.manual { background: var(--ink); color: var(--paper); }
+.pill.kind { background: var(--sunk); color: var(--ink); }
+.said { overflow-wrap: anywhere; }
+.said .handle { margin-right: 4px; }
+mark.hl { color: inherit; background: linear-gradient(transparent 48%, var(--amber-wash) 48%); padding: 0 1px; }
+mark.hl.red { background: linear-gradient(transparent 48%, var(--red-wash) 48%); }
+.meta { color: var(--ink-2); font-size: 0.82rem; overflow-wrap: anywhere; }
+.manual-prev { max-height: 220px; width: auto; border-radius: 6px; border: 1px solid var(--rule); }
+.copy-out { font: 0.85rem/1.45 var(--font-mono); min-height: 180px; }
+@media (max-width: 420px) {
+  .finding { grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .thumb { width: 84px; }
+}
+
+/* Screenshot viewer and toast */
+.viewer { position: fixed; inset: 0; z-index: 20; background: var(--scrim); overflow: auto; padding: calc(env(safe-area-inset-top, 0px) + 64px) max(16px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 16px) max(16px, env(safe-area-inset-left, 0px)); }
+.viewer img { display: block; margin: 0 auto; max-width: min(100%, 560px); height: auto; border-radius: 6px; }
+.viewer-close { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: max(16px, env(safe-area-inset-right, 0px)); }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); z-index: 30; width: max-content; max-width: calc(100% - 32px); display: flex; gap: 16px; align-items: center; padding: 12px 16px; border-radius: 10px; background: var(--ink); color: var(--paper); box-shadow: 0 10px 28px var(--shadow); }
+.toast .link { color: inherit; padding: 0; min-height: 0; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-in">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 40 26" aria-hidden="true"><ellipse cx="20" cy="13" rx="17" ry="10" transform="rotate(-8 20 13)"/><circle cx="20" cy="13" r="3.2"/></svg>
+      <span>Sister Protects</span>
+    </div>
+    <p class="top-status" id="top-status" aria-live="polite">Loading…</p>
+    <div class="meter" aria-hidden="true"><span id="meter-fill"></span></div>
+  </div>
+  <nav class="wrap tabs" role="tablist" aria-label="Steps">
+    <button type="button" role="tab" id="tabbtn-her" aria-controls="tab-her" aria-selected="true" data-tab="her"><span class="n">1</span>Her</button>
+    <button type="button" role="tab" id="tabbtn-accounts" aria-controls="tab-accounts" aria-selected="false" tabindex="-1" data-tab="accounts"><span class="n">2</span>Accounts<span class="count" id="count-accounts"></span></button>
+    <button type="button" role="tab" id="tabbtn-scan" aria-controls="tab-scan" aria-selected="false" tabindex="-1" data-tab="scan"><span class="n">3</span>Scan</button>
+    <button type="button" role="tab" id="tabbtn-findings" aria-controls="tab-findings" aria-selected="false" tabindex="-1" data-tab="findings"><span class="n">4</span>Findings<span class="count" id="count-findings"></span></button>
+  </nav>
+</header>
+
+<main>
+  <div class="wrap" id="banner-slot"></div>
+
+  <!-- Step 1 -->
+  <section class="wrap panel" id="tab-her" role="tabpanel" aria-labelledby="tabbtn-her">
+    <div class="intro">
+      <h1>Find her in the accounts she follows</h1>
+      <p class="lede">Screenshot what you see on Instagram. This page reads every screenshot and flags the ones where she commented, got tagged, or her name comes up.</p>
+    </div>
+
+    <form class="card" id="target-form" autocomplete="off">
+      <fieldset id="target-fields" disabled>
+        <h2>Who you're looking for</h2>
+        <div class="field">
+          <label for="t-handles">Her Instagram username</label>
+          <p class="hint">Add her other accounts too (a second or private account), separated by commas.</p>
+          <div class="at-input"><span aria-hidden="true">@</span><input type="text" id="t-handles" placeholder="her.username" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+          <div class="chips" id="chips-handles"></div>
+        </div>
+        <div class="field">
+          <label for="t-names">Her name and nicknames <span class="opt">(optional)</span></label>
+          <p class="hint">Catches posts that name her without tagging her. Separate with commas.</p>
+          <input type="text" id="t-names" placeholder="First name, nickname">
+          <div class="chips" id="chips-names"></div>
+        </div>
+        <div class="field">
+          <label for="t-words">Other things to watch for <span class="opt">(optional)</span></label>
+          <p class="hint">Her phone number, her school, a word she always uses.</p>
+          <input type="text" id="t-words" placeholder="For example: 813-555-0100">
+          <div class="chips" id="chips-words"></div>
+        </div>
+        <div class="row">
+          <button class="btn primary" type="submit">Save and go to step 2</button>
+          <span class="hint" id="target-saved" aria-live="polite"></span>
+        </div>
+      </fieldset>
+    </form>
+
+    <section class="stack" aria-labelledby="how-h">
+      <h2 id="how-h">How it works</h2>
+      <ol class="steps">
+        <li><div><b>Add her username here.</b><p>Add her name and nicknames too. Those catch posts that talk about her without tagging her.</p></div></li>
+        <li><div><b>Make the list of accounts to check.</b><p>On her profile, tap Following and screenshot the list as you scroll. Add the screenshots on the Accounts tab and the page writes down every username.</p></div></li>
+        <li><div><b>Go through each account and take screenshots.</b><p>Open the comments under each post, the account's Tagged tab and its Reels. Upload the screenshots on the Scan tab, as many at once as you like.</p></div></li>
+        <li><div><b>Look over what turned up.</b><p>Every screenshot that shows her lands in Findings with what was found. Mark each account "Nothing found" once you're done with it.</p></div></li>
+      </ol>
+      <div class="example" aria-label="Example of a finding">
+        <span class="example-tag">Example</span>
+        <div class="finding">
+          <div class="mock-shot" aria-hidden="true"><i></i><i></i><i></i><i class="hit"></i><i></i><i></i><i></i></div>
+          <div class="finding-body">
+            <div class="badges"><span class="pill match">Found</span><span class="pill kind">She commented</span></div>
+            <p class="said"><span class="handle">@her.username</span> omg i'm coming!! what time</p>
+            <p class="meta">On <span class="handle">@corner.cafe.events</span> · from a screenshot of the comments</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card limits stack" aria-labelledby="limits-h">
+      <h2 id="limits-h">What it can't do</h2>
+      <ul>
+        <li>It can't open Instagram or go through accounts for you. Instagram doesn't allow that, so you take the screenshots and this page does the reading.</li>
+        <li>It only sees what's in your screenshots. Accounts that are private to you, and comments she deleted, won't show up.</li>
+        <li>It reads text. It can't recognize her face. If you see a photo of her with no name or tag, keep it with "Save anyway".</li>
+        <li>"Possible" means something looks close to her username or matches her name. Check those before you rely on them.</li>
+      </ul>
+    </section>
+
+    <section class="card limits stack" aria-labelledby="worry-h">
+      <h2 id="worry-h">If you find something worrying</h2>
+      <ul>
+        <li>Keep a copy before it gets deleted. This page saves each finding with the date.</li>
+        <li>Don't argue with the other account. Report it to Instagram: the ⋯ menu on their profile, then Report.</li>
+        <li>If an adult is asking her for photos, money or to meet up, or she's in danger, call the police. In an emergency, call 911.</li>
+        <li>If it shows sexual images of anyone under 18, don't save or share them, not even to show someone. Report them to the NCMEC CyberTipline at <a href="https://report.cybertip.org/" target="_blank" rel="noopener noreferrer">report.cybertip.org</a> or 1-800-843-5678.</li>
+      </ul>
+    </section>
+
+    <section class="stack" aria-labelledby="set-h">
+      <h2 id="set-h">Reading and saving</h2>
+      <div class="card stack">
+        <p class="status-line" id="reader-status"></p>
+        <label class="check" id="careful-wrap" hidden><input type="checkbox" id="careful"><span>Read more carefully. Slower, and uses more of your Claude usage.</span></label>
+        <p class="status-line" id="store-status"></p>
+        <div class="row">
+          <button class="btn small" type="button" data-action="download-backup" id="btn-backup">Download a backup</button>
+          <label class="btn small file-btn">Restore a backup<input type="file" id="restore-file" accept=".json,application/json" class="sr-only"></label>
+        </div>
+        <div id="clear-box"></div>
+      </div>
+    </section>
+  </section>
+
+  <!-- Step 2 -->
+  <section class="wrap panel" id="tab-accounts" role="tabpanel" aria-labelledby="tabbtn-accounts" hidden>
+    <div class="sec-head">
+      <h2>Accounts to check</h2>
+      <p class="lede">Everyone she follows. You can add her followers too.</p>
+    </div>
+    <div class="add-bar">
+      <label class="btn primary file-btn">Add from screenshots<input type="file" id="follow-files" accept="image/*" multiple class="sr-only"></label>
+      <button class="btn" type="button" data-action="show-paste">Paste a list</button>
+      <form class="add-one" id="add-one"><label for="add-one-input" class="sr-only">Add one account</label><input type="text" id="add-one-input" placeholder="@username" autocapitalize="none" autocorrect="off" spellcheck="false"><button class="btn" type="submit">Add</button></form>
+    </div>
+    <div id="import-box"></div>
+    <div class="list-tools">
+      <div class="filters" id="filters" role="group" aria-label="Show"></div>
+      <label for="acct-q" class="sr-only">Find an account</label>
+      <input type="search" id="acct-q" placeholder="Find an account" autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>
+    <div>
+      <ul class="accts" id="acct-list"></ul>
+      <p class="empty" id="acct-empty" hidden></p>
+    </div>
+  </section>
+
+  <!-- Step 3 -->
+  <section class="wrap panel" id="tab-scan" role="tabpanel" aria-labelledby="tabbtn-scan" hidden>
+    <div class="sec-head">
+      <h2>Scan screenshots</h2>
+      <p class="lede">Upload screenshots from the accounts on your list: comments, tagged posts, reels, stories. Each one that shows her is saved to Findings.</p>
+    </div>
+    <div class="card stack">
+      <div class="field">
+        <label for="scan-from">These screenshots are from <span class="opt">(optional)</span></label>
+        <p class="hint">Leave it blank and the account is worked out from each screenshot.</p>
+        <input type="text" id="scan-from" list="acct-options" placeholder="@account" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <label class="drop" id="drop"><input type="file" id="scan-files" accept="image/*" multiple class="sr-only"><strong>Choose screenshots</strong><span>or drop them here. You can pick lots at once.</span></label>
+      <p class="status-line" id="reader-line"></p>
+    </div>
+    <div id="scan-progress"></div>
+    <ul class="shots" id="shot-list"></ul>
+    <details class="card tips">
+      <summary>Where to look on each account</summary>
+      <ul>
+        <li>Under each post, open all the comments and scroll. Replies are hidden until you tap "View replies", so open those too.</li>
+        <li>The account's Tagged tab (the person icon on their profile) shows posts people were tagged in.</li>
+        <li>Reels have their own comments. Tap the speech bubble.</li>
+        <li>Story highlights (the circles under the bio) sometimes show screenshots of messages or tags.</li>
+        <li>If you can open the list of likes on a post, screenshot that too.</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- Step 4 -->
+  <section class="wrap panel" id="tab-findings" role="tabpanel" aria-labelledby="tabbtn-findings" hidden>
+    <div class="sec-head">
+      <h2>Findings</h2>
+      <p class="lede" id="find-summary"></p>
+    </div>
+    <div class="row">
+      <button class="btn small" type="button" data-action="copy-summary">Copy summary</button>
+      <button class="btn small" type="button" data-action="download-report" id="btn-report">Download report</button>
+      <label class="btn small file-btn">Add a screenshot by hand<input type="file" id="manual-file" accept="image/*" class="sr-only"></label>
+    </div>
+    <div id="copy-box"></div>
+    <div id="manual-box"></div>
+    <div class="groups" id="find-groups"></div>
+  </section>
+</main>
+
+<datalist id="acct-options"></datalist>
+
+<div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="Screenshot" hidden>
+  <button class="btn viewer-close" type="button" data-action="close-viewer">Close</button>
+  <img id="viewer-img" alt="">
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden><span id="toast-msg"></span><button class="link" type="button" id="toast-act" hidden>Undo</button></div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ================= helpers ================= */
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const plural = (n, one, many) => `${Number(n).toLocaleString()} ${n === 1 ? one : (many || one + 's')}`;
+  const day = (ts) => new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const isoDay = () => new Date().toISOString().slice(0, 10);
+  const clone = (v) => JSON.parse(JSON.stringify(v ?? null));
+  function withTimeout(promise, ms, code = 'timeout') {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject({ code, message: 'Timed out' }), ms); }),
+    ]).finally(() => clearTimeout(timer));
+  }
+  function debounce(fn, ms) {
+    let t = null;
+    const d = () => { clearTimeout(t); t = setTimeout(() => { t = null; fn(); }, ms); };
+    d.flush = () => { if (t) { clearTimeout(t); t = null; fn(); } };
+    return d;
+  }
+  const splitLines = (s) => String(s || '').split(/\n+/).map((x) => x.trim()).filter(Boolean);
+
+  /* ================= matching (pure) ================= */
+  const fold = (s) => String(s ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const HANDLE_RE = /^[a-z0-9._]{1,30}$/;
+  const CUT_RE = /(…|\.\.\.)\s*$/;
+
+  // Instagram usernames: letters, numbers, periods and underscores, up to 30.
+  function cleanHandle(raw) {
+    const s = fold(raw).trim()
+      .replace(/^https?:\/\/(www\.)?instagram\.com\//, '')
+      .replace(/[/?#].*$/, '')
+      .replace(/^@+/, '')
+      .replace(/\s+/g, '')
+      .replace(/(…|\.\.\.)$/, '')
+      .replace(/\.+$/, '');
+    return HANDLE_RE.test(s) ? s : '';
+  }
+  function parseHandles(text) {
+    const out = [];
+    for (const part of String(text || '').split(/[\s,;]+/)) {
+      const h = cleanHandle(part);
+      if (h && !out.includes(h)) out.push(h);
+    }
+    return out;
+  }
+  function parsePhrases(text) {
+    const out = [];
+    for (const part of String(text || '').split(/[,;\n]+/)) {
+      const t = part.trim().replace(/\s+/g, ' ');
+      if (t.length >= 2 && !out.some((x) => fold(x) === fold(t))) out.push(t);
+    }
+    return out;
+  }
+  // One account per line (or comma-separated); words after the username are ignored.
+  function parsePastedList(text) {
+    const out = [];
+    for (const part of String(text || '').split(/[\n,;]+/)) {
+      const first = part.trim().split(/\s+/)[0];
+      const h = cleanHandle(first);
+      if (h && /[a-z]/.test(h) && !UI_WORDS.has(h) && !out.includes(h)) out.push(h);
+    }
+    return out;
+  }
+  // Instagram's own words that show up when a screen is read as plain text.
+  const UI_WORDS = new Set(('following followers follow follows message remove requested suggested for you see all sort by default date followed '
+    + 'latest earliest search mutual verified close friends edit subscriptions categories least interacted with most shown in feed accounts '
+    + 'hashtags people no results posts reels tagged done back cancel more options view replies reply like likes liked and others').split(' '));
+
+  // OCR fallback: a following-list row starts with the username, which is always lowercase.
+  function parseFollowingLines(lines) {
+    const out = [];
+    for (const raw of lines) {
+      const line = String(raw || '').trim();
+      if (!line) continue;
+      const first = line.split(/\s+/)[0].replace(/^[@•·*]+/, '');
+      if (/[A-Z]/.test(first)) continue;
+      const u = cleanHandle(first);
+      if (!u || u.length < 3 || !/[a-z]/.test(u) || UI_WORDS.has(u) || out.some((x) => x.u === u)) continue;
+      out.push({ u, name: '' });
+    }
+    return out;
+  }
+
+  const squash = (s) => fold(s).replace(/[^a-z0-9]/g, '').replace(/rn/g, 'm').replace(/0/g, 'o').replace(/1/g, 'l').replace(/5/g, 's');
+  const allowedEdits = (len) => (len >= 13 ? 2 : len >= 7 ? 1 : 0);
+  function lev(a, b, max) {
+    if (a === b) return 0;
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      let best = i;
+      for (let j = 1; j <= b.length; j++) {
+        const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        cur.push(v);
+        if (v < best) best = v;
+      }
+      if (best > max) return max + 1;
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  // Is this username hers? 'match', 'possible' (close, or cut off), or ''.
+  function sameHandle(raw, h) {
+    if (!raw || !h) return '';
+    const cut = CUT_RE.test(String(raw));
+    const c = cleanHandle(raw);
+    if (!c) return '';
+    if (cut) return c.length >= 4 && h.startsWith(c) ? 'possible' : '';
+    if (c === h) return 'match';
+    const a = squash(c);
+    const b = squash(h);
+    if (a.length < 4 || b.length < 4) return '';
+    const k = allowedEdits(b.length);
+    return (k === 0 ? a === b : lev(a, b, k) <= k) ? 'possible' : '';
+  }
+  const words = (text) => fold(text).split(/[^a-z0-9._]+/).map((t) => t.replace(/^\.+|\.+$/g, '')).filter(Boolean);
+  // Does her username appear inside this text? Joins up to 3 neighbouring words, for text read as "sarah j" or "sarah_ j".
+  function handleInText(h, text) {
+    const toks = words(text);
+    if (!toks.length || !h) return '';
+    if (toks.includes(h)) return 'match';
+    const target = squash(h);
+    if (target.length < 4) return '';
+    const k = allowedEdits(target.length);
+    for (let i = 0; i < toks.length; i++) {
+      let joined = '';
+      for (let j = i; j < Math.min(i + 3, toks.length); j++) {
+        joined += squash(toks[j]);
+        if (joined.length > target.length + k) break;
+        if (joined.length + k < target.length) continue;
+        if (k === 0 ? joined === target : lev(joined, target, k) <= k) return 'possible';
+      }
+    }
+    return '';
+  }
+  function phraseIn(phrase, text) {
+    const p = fold(phrase).split(/[^a-z0-9]+/).filter(Boolean);
+    if (!p.length || p.join('').length < 3) return false;
+    const t = fold(text).split(/[^a-z0-9]+/).filter(Boolean);
+    outer: for (let i = 0; i + p.length <= t.length; i++) {
+      for (let j = 0; j < p.length; j++) if (t[i + j] !== p[j]) continue outer;
+      return true;
+    }
+    return false;
+  }
+  function wordIn(w, text) {
+    const digits = String(w).replace(/\D/g, '');
+    if (digits.length >= 7 && digits.length >= String(w).replace(/\s/g, '').length * 0.6) return String(text).replace(/\D/g, '').includes(digits);
+    const f = fold(w).trim();
+    return f.length >= 3 && fold(text).includes(f);
+  }
+
+  const KIND_LABEL = {
+    wrote: 'She commented', posted: 'She posted it', tagged: 'She is tagged', mention: 'She is mentioned', liked: 'She liked it',
+    listed: 'She is in the list', own: 'Her own account', appears: 'Her username shows', name: 'Her name shows', word: 'Your keyword shows', photo: 'Saved by you',
+  };
+  const KIND_ORDER = ['wrote', 'posted', 'tagged', 'mention', 'liked', 'listed', 'own', 'appears', 'name', 'word', 'photo'];
+  const TYPE_KIND = { caption: 'posted', collab: 'posted', comment: 'wrote', reply: 'wrote', tag: 'tagged', liked_by: 'liked', mention: 'mention' };
+
+  // rr: what a reader saw. Returns every place she shows up, strongest first.
+  function findMatches(rr, target) {
+    const hits = [];
+    const seen = new Set();
+    const add = (kind, level, text, who, box) => {
+      const t = String(text || '').trim().slice(0, 300);
+      const key = `${kind}|${who || ''}|${t}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      hits.push({ kind, level, text: t, who: who || '', box: box || null });
+    };
+    const entries = Array.isArray(rr.entries) ? rr.entries : [];
+    const other = splitLines(rr.otherText);
+    for (const h of target.handles || []) {
+      const own = sameHandle(rr.account || '', h);
+      if (own) add('own', own, '', h);
+      for (const e of entries) {
+        const author = e.author ? (cleanHandle(e.author) || String(e.author)) : '';
+        const byHer = e.author ? sameHandle(e.author, h) : '';
+        if (byHer) { add(TYPE_KIND[e.type] || 'appears', byHer, e.text, author, e.box); continue; }
+        const inText = e.text ? handleInText(h, e.text) : '';
+        if (inText) add(rr.source === 'ocr' ? 'appears' : 'mention', inText, e.text, author, e.box);
+      }
+      for (const u of rr.listed || []) {
+        const l = sameHandle(u, h);
+        if (l) add('listed', l, '', cleanHandle(u) || u);
+      }
+      for (const line of other) {
+        const m = handleInText(h, line);
+        if (m) add('mention', m, line, '');
+      }
+    }
+    const taken = new Set(hits.map((x) => x.text).filter(Boolean));
+    const texts = entries.filter((e) => e.text).map((e) => ({ text: e.text, who: e.author ? cleanHandle(e.author) : '', box: e.box }))
+      .concat(other.map((t) => ({ text: t, who: '', box: null })));
+    for (const t of texts) {
+      const key = String(t.text).trim().slice(0, 300);
+      if (taken.has(key)) continue;
+      if ((target.names || []).some((n) => phraseIn(n, t.text))) add('name', 'possible', t.text, t.who, t.box);
+      else if ((target.words || []).some((w) => wordIn(w, t.text))) add('word', 'possible', t.text, t.who, t.box);
+    }
+    const rank = (x) => (x.level === 'match' ? 0 : 1) * 100 + KIND_ORDER.indexOf(x.kind);
+    return hits.sort((a, b) => rank(a) - rank(b));
+  }
+
+  /* ================= images ================= */
+  async function decodeImage(file) {
+    if (typeof createImageBitmap === 'function') {
+      try { return await createImageBitmap(file); } catch { /* try the <img> route */ }
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      const c = makeCanvas(img.naturalWidth, img.naturalHeight);
+      c.getContext('2d').drawImage(img, 0, 0);
+      return c;
+    } catch {
+      throw { code: 'image_rejected', message: 'Not a readable image' };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  function makeCanvas(w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    return c;
+  }
+  const toBlob = (c, type, q) => new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject({ code: 'image_rejected' })), type, q));
+  const freeImage = (img) => { if (img && typeof img.close === 'function') img.close(); };
+
+  // Slices very tall screenshots so text stays readable once Claude shrinks each image to about 1.2 megapixels.
+  async function claudeParts(file) {
+    const img = await decodeImage(file);
+    try {
+      const W = img.width;
+      const H = img.height;
+      const ranges = [];
+      if (H / W <= 2.5) ranges.push([0, H]);
+      else {
+        const tileH = Math.round(W * 2.1);
+        const step = Math.round(tileH * 0.88);
+        for (let y = 0; ; y += step) {
+          const y1 = Math.min(H, y + tileH);
+          ranges.push([y, y1]);
+          if (y1 >= H) break;
+        }
+      }
+      const out = [];
+      for (const [y0, y1] of ranges) {
+        const h = y1 - y0;
+        const s = Math.min(1, Math.sqrt(1.25e6 / (W * h)));
+        const c = makeCanvas(W * s, h * s);
+        c.getContext('2d').drawImage(img, 0, y0, W, h, 0, 0, c.width, c.height);
+        out.push(await toBlob(c, 'image/jpeg', 0.9));
+      }
+      return out;
+    } finally {
+      freeImage(img);
+    }
+  }
+
+  // A small preview kept with each finding. On-device reads also get a red pencil ring around what matched.
+  async function makeThumb(file, boxes) {
+    const img = await decodeImage(file);
+    try {
+      const render = (maxW, q) => {
+        let s = Math.min(1, maxW / img.width);
+        if (img.height * s > 2400) s = 2400 / img.height;
+        const c = makeCanvas(img.width * s, img.height * s);
+        const g = c.getContext('2d');
+        g.drawImage(img, 0, 0, c.width, c.height);
+        if (boxes && boxes.length) {
+          g.strokeStyle = '#d0311b';
+          g.lineWidth = Math.max(2.5, c.width / 150);
+          for (const b of boxes) {
+            const x = b.x0 * s; const y = b.y0 * s; const w = (b.x1 - b.x0) * s; const h = (b.y1 - b.y0) * s;
+            g.beginPath();
+            g.ellipse(x + w / 2, y + h / 2, w / 2 + 10, h / 2 + 7, -0.03, 0, Math.PI * 2);
+            g.stroke();
+          }
+        }
+        return c.toDataURL('image/jpeg', q);
+      };
+      let url = render(540, 0.62);
+      if (url.length > 200000) url = render(400, 0.5);
+      if (url.length > 200000) url = render(300, 0.45);
+      return url;
+    } finally {
+      freeImage(img);
+    }
+  }
+
+  /* ================= readers ================= */
+  const SCAN_PROMPT = `Read this Instagram screenshot and write down what it shows, so a program can search the text. Report only what you can actually read. Don't guess, and don't try to identify anyone from their face or looks.
+
+Reply with only one JSON object with these fields:
+- "screen": what the screenshot shows, one of "comments", "post", "reel", "story", "profile", "tagged", "likes", "following_list", "followers_list", "messages", "search", "other".
+- "account": the username of the account whose post, reel, story or profile this is, or null if it isn't visible.
+- "entries": every caption, comment and reply you can see, top to bottom, each as {"author": username, "type": type, "text": text}. "type" is "caption" (the post's own text), "comment", "reply", "tag" (a username tagged on the photo or named in a "with" line), "liked_by" (a username in a "Liked by" line, with text ""), "collab" (a co-author in the post header, with text ""), or "other". Copy the text exactly, including @mentions and emojis.
+- "listed": if the screenshot is a list of accounts (likes, followers, following, search results), every username in the list, top to bottom. Otherwise [].
+- "other_text": other words that are part of the content, such as text on the photo, a location or sticker text, one item per line. Leave out Instagram's own buttons and labels (Reply, See translation, View replies, Follow, like counts, times like "2d").
+- "unreadable": true only if the screenshot is too blurry or cut off to read.
+
+Write every username exactly as shown, in lowercase, without the @, keeping dots and underscores. If a username is cut off, write the visible part followed by "…".
+
+Example of the shape (not real data):
+{"screen":"comments","account":"account_name","entries":[{"author":"commenter_name","type":"comment","text":"love this @someone"}],"listed":[],"other_text":"","unreadable":false}`;
+
+  const LIST_PROMPT = `This screenshot shows a list of Instagram accounts, such as someone's Following or Followers list. Write down every account in the list, top to bottom. Report only what you can read; don't guess.
+
+Reply with only one JSON object, like this (not real data):
+{"list":"following","accounts":[{"username":"account_name","name":"Display Name"}]}
+
+- "list": "following" or "followers" if the screen's title or selected tab says so, otherwise "other".
+- "username": exactly as shown, in lowercase, without the @, keeping dots and underscores. Skip any you can't read completely.
+- "name": the display name shown with it, or "" if there is none.
+- Leave out accounts under "Suggested for you".`;
+
+  const sliceNote = (n) => `\n\nThese ${n} images are slices of one long screenshot, in order from top to bottom. Treat them as one screen and list each item once.`;
+  const PLACEHOLDERS = new Set(['account_name', 'commenter_name']);
+
+  function normalizeScan(data, source) {
+    const o = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    const entries = (Array.isArray(o.entries) ? o.entries : [])
+      .filter((e) => e && typeof e === 'object')
+      .map((e) => ({
+        author: typeof e.author === 'string' && e.author.trim() ? e.author.trim() : null,
+        type: String(e.type || 'other').toLowerCase(),
+        text: typeof e.text === 'string' ? e.text : '',
+      }))
+      .filter((e) => !(e.author && PLACEHOLDERS.has(cleanHandle(e.author))))
+      .slice(0, 400);
+    const listed = (Array.isArray(o.listed) ? o.listed : [])
+      .map((x) => (typeof x === 'string' ? x : x && x.username))
+      .filter((x) => typeof x === 'string' && cleanHandle(x) && !PLACEHOLDERS.has(cleanHandle(x)));
+    const other = Array.isArray(o.other_text) ? o.other_text.join('\n') : (typeof o.other_text === 'string' ? o.other_text : '');
+    const account = typeof o.account === 'string' && cleanHandle(o.account) && !PLACEHOLDERS.has(cleanHandle(o.account)) ? o.account.trim() : null;
+    return { source, screen: typeof o.screen === 'string' ? o.screen : '', account, entries, listed, otherText: other, unreadable: o.unreadable === true };
+  }
+  function mergeScans(list) {
+    if (list.length === 1) return list[0];
+    const seen = new Set();
+    const entries = [];
+    for (const r of list) {
+      for (const e of r.entries) {
+        const k = `${e.author}|${e.text}`;
+        if (!seen.has(k)) { seen.add(k); entries.push(e); }
+      }
+    }
+    return {
+      source: list[0].source,
+      screen: (list.find((r) => r.screen) || {}).screen || '',
+      account: (list.find((r) => r.account) || {}).account || null,
+      entries,
+      listed: [...new Set(list.flatMap((r) => r.listed))],
+      otherText: list.map((r) => r.otherText).filter(Boolean).join('\n'),
+      unreadable: list.every((r) => r.unreadable),
+    };
+  }
+  function normalizeList(data) {
+    const o = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    const raw = Array.isArray(o.accounts) ? o.accounts : Array.isArray(data) ? data : [];
+    const accounts = [];
+    for (const a of raw) {
+      const u = cleanHandle(typeof a === 'string' ? a : a && a.username);
+      if (!u || PLACEHOLDERS.has(u) || accounts.some((x) => x.u === u)) continue;
+      const name = a && typeof a.name === 'string' ? a.name.trim().slice(0, 80) : '';
+      accounts.push({ u, name });
+    }
+    const list = o.list === 'following' || o.list === 'followers' ? o.list : '';
+    return { list, accounts };
+  }
+
+  const ClaudeReader = {
+    id: 'claude',
+    sample: null,
+    limits: null,
+    async init() {
+      try {
+        if (!window.claude || typeof window.claude.use !== 'function') return false;
+        const sample = await window.claude.use('sample');
+        if (!sample) return false;
+        const limits = await sample.limits();
+        if (!limits || !limits.images) return false;
+        this.sample = sample;
+        this.limits = limits;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    options(signal, fresh) {
+      const o = { signal };
+      const tier = state.settings.careful ? 'default' : 'quick';
+      const tiers = this.limits && this.limits.modelTiers;
+      if (!Array.isArray(tiers) || tiers.includes(tier)) o.modelTier = tier;
+      if (fresh) o.cache = false;
+      return o;
+    },
+    async ask(prompt, file, signal, fresh) {
+      const parts = await claudeParts(file);
+      const max = Math.max(1, Number(this.limits.images.maxCount) || 1);
+      const out = [];
+      for (let i = 0; i < parts.length; i += max) {
+        const group = parts.slice(i, i + max);
+        const p = parts.length > 1 ? prompt + sliceNote(group.length) : prompt;
+        out.push(await this.sample.json(p, { ...this.options(signal, fresh), images: group }));
+      }
+      return out;
+    },
+    async read(file, signal, fresh) {
+      const answers = await this.ask(SCAN_PROMPT, file, signal, fresh);
+      return mergeScans(answers.map((a) => normalizeScan(a, 'claude')));
+    },
+    async readList(file, signal) {
+      const answers = await this.ask(LIST_PROMPT, file, signal, false);
+      const lists = answers.map(normalizeList);
+      const accounts = [];
+      for (const l of lists) for (const a of l.accounts) if (!accounts.some((x) => x.u === a.u)) accounts.push(a);
+      return { list: (lists.find((l) => l.list) || {}).list || '', accounts };
+    },
+  };
+
+  const TESSERACT = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  function loadScript(src, ms) {
+    return withTimeout(new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = () => reject({ code: 'no_reader', message: 'Could not load ' + src });
+      document.head.appendChild(s);
+    }), ms, 'no_reader');
+  }
+  // On-device fallback (Tesseract). Used wherever Claude can't read the screenshots.
+  const OcrReader = {
+    id: 'ocr',
+    worker: null,
+    loading: null,
+    ensure() {
+      if (this.worker) return Promise.resolve(this.worker);
+      if (!this.loading) {
+        this.loading = (async () => {
+          if (!window.Tesseract) await loadScript(TESSERACT, 30000);
+          const w = await withTimeout(window.Tesseract.createWorker('eng', 1, {
+            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
+            corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1',
+            langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int',
+          }), 120000, 'no_reader');
+          this.worker = w;
+          return w;
+        })().catch((e) => { this.loading = null; throw e && e.code ? e : { code: 'no_reader', message: String(e && e.message || e) }; });
+      }
+      return this.loading;
+    },
+    async recognize(file) {
+      const worker = await this.ensure();
+      const img = await decodeImage(file);
+      let c; let scale;
+      try {
+        scale = Math.min(2, Math.max(1, 1200 / img.width));
+        if (img.width * img.height * scale * scale > 12e6) scale = Math.sqrt(12e6 / (img.width * img.height));
+        c = makeCanvas(img.width * scale, img.height * scale);
+        const g = c.getContext('2d', { willReadFrequently: true });
+        g.drawImage(img, 0, 0, c.width, c.height);
+        const id = g.getImageData(0, 0, c.width, c.height);
+        const d = id.data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          d[i] = d[i + 1] = d[i + 2] = y;
+          sum += y;
+        }
+        if (sum / (d.length / 4) < 110) for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = 255 - d[i]; // dark mode
+        g.putImageData(id, 0, 0);
+      } finally {
+        freeImage(img);
+      }
+      const { data } = await worker.recognize(c);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      const lines = (data.lines || []).map((l) => ({ text: lineText(g, c.height, l), bbox: l.bbox }));
+      return { lines, scale };
+    },
+    async read(file) {
+      const { lines, scale } = await this.recognize(file);
+      const entries = lines.map((l) => ({
+        author: null,
+        type: 'other',
+        text: l.text,
+        box: l.bbox ? { x0: l.bbox.x0 / scale, y0: l.bbox.y0 / scale, x1: l.bbox.x1 / scale, y1: l.bbox.y1 / scale } : null,
+      })).filter((e) => e.text);
+      return { source: 'ocr', screen: '', account: null, entries, listed: [], otherText: '', unreadable: entries.length === 0 };
+    },
+    async readList(file) {
+      const { lines } = await this.recognize(file);
+      return { list: '', accounts: parseFollowingLines(lines.map((l) => l.text)) };
+    },
+  };
+  // Tesseract often drops underscores ("mike_22" comes back as "mike 22"). An underscore leaves a dark
+  // stroke along the bottom of the gap between two words, where a real space is blank.
+  function lineText(g, height, line) {
+    const ws = (line.words || []).filter((w) => w.bbox && String(w.text || '').trim());
+    if (ws.length < 2 || !line.bbox) return String(line.text || '').trim();
+    const lh = line.bbox.y1 - line.bbox.y0;
+    const top = Math.round(line.bbox.y0 + lh * 0.55);
+    const bottom = Math.min(height - 1, Math.round(line.bbox.y1 + lh * 0.3));
+    let out = ws[0].text.trim();
+    for (let i = 1; i < ws.length; i++) {
+      const x0 = Math.round(ws[i - 1].bbox.x1) + 1;
+      const w = Math.round(ws[i].bbox.x0) - 1 - x0;
+      let sep = ' ';
+      if (w >= 2 && w < lh * 1.5 && bottom > top) {
+        const px = g.getImageData(x0, top, w, bottom - top + 1).data;
+        let inked = 0;
+        for (let x = 0; x < w; x++) {
+          for (let y = 0; y <= bottom - top; y++) {
+            if (px[(y * w + x) * 4] < 110) { inked++; break; }
+          }
+        }
+        if (inked / w >= 0.7) sep = '_';
+      }
+      out += sep + ws[i].text.trim();
+    }
+    return out;
+  }
+
+  const PAUSE = new Set(['rate_limited', 'session_expired']);
+  const FATAL = new Set(['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'images_unavailable']);
+  function classify(e) {
+    const c = e && e.code;
+    if (c === 'cancelled') return 'cancel';
+    if (PAUSE.has(c)) return 'pause';
+    if (FATAL.has(c)) return 'fatal';
+    return 'skip';
+  }
+  const ERR = {
+    rate_limited: 'Claude needs a break: too many screenshots at once, or you reached your usage limit. Wait a few minutes, then tap Resume.',
+    session_expired: 'Your Claude sign-in ran out. Sign in again, then tap Resume.',
+    not_granted: "This page wasn't allowed to use Claude.",
+    sampling_disabled: "Claude isn't available on this account.",
+    not_declared: "This page can't use Claude.",
+    capability_disabled: "Claude can't be used in this view.",
+    capability_removed: "Claude can't be used in this view.",
+    images_unavailable: "This view can't send pictures to Claude.",
+    image_rejected: "This file isn't a picture that can be read. Try a normal screenshot (PNG or JPG).",
+    refused: "Claude wouldn't read this one.",
+    invalid_json: 'The reading came back garbled. Tap Read again.',
+    empty_completion: 'Nothing came back. Tap Read again.',
+    upstream_error: 'Connection problem. Tap Read again.',
+    prompt_too_large: 'This screenshot is too big to read in one go.',
+    timeout: 'This took too long. Tap Read again.',
+    no_reader: "The on-device reader couldn't start. Check your internet connection and try again.",
+  };
+  const errText = (e) => ERR[e && e.code] || "Couldn't read this one. Tap Read again.";
+
+  /* ================= storage ================= */
+  function splitBySize(list, max) {
+    const chunks = [];
+    let cur = [];
+    let size = 0;
+    for (const item of list) {
+      const s = JSON.stringify(item).length + 1;
+      if (cur.length && size + s > max) { chunks.push(cur); cur = []; size = 0; }
+      cur.push(item);
+      size += s;
+    }
+    if (cur.length) chunks.push(cur);
+    return chunks;
+  }
+
+  // Your Claude account, in this page's private per-person space (nobody else who opens the page can read it).
+  class DbStore {
+    constructor(db, uid) {
+      this.kind = 'claude';
+      this.main = db.doc(`data/users/${uid}/sister-protects`);
+      this.accCol = this.main.collection('accounts');
+      this.finCol = this.main.collection('findings');
+      this.written = [];
+      this.queues = new Map();
+    }
+    serial(key, fn) {
+      const next = (this.queues.get(key) || Promise.resolve()).catch(() => {}).then(fn);
+      this.queues.set(key, next);
+      return next;
+    }
+    async load() {
+      const [m, a, f] = await Promise.all([this.main.get(), this.accCol.get(), this.finCol.get()]);
+      const chunks = a.docs.filter((d) => d.exists && /^c\d+$/.test(d.id))
+        .map((d) => ({ i: Number(d.id.slice(1)), list: clone(d.data().list) || [] }))
+        .sort((x, y) => x.i - y.i);
+      this.written = [];
+      for (const c of chunks) this.written[c.i] = JSON.stringify(c.list);
+      return {
+        main: m.exists ? clone(m.data()) : null,
+        accounts: chunks.flatMap((c) => c.list),
+        findings: f.docs.filter((d) => d.exists).map((d) => clone(d.data())),
+      };
+    }
+    saveMain(body) { return this.serial('main', () => this.main.set(body)); }
+    saveAccounts(list) {
+      return this.serial('accounts', async () => {
+        const chunks = splitBySize(list, 190000);
+        for (let i = 0; i < chunks.length; i++) {
+          const json = JSON.stringify(chunks[i]);
+          if (this.written[i] === json) continue;
+          await this.accCol.doc('c' + i).set({ list: chunks[i] });
+          this.written[i] = json;
+        }
+        for (let i = chunks.length; i < this.written.length; i++) {
+          if (this.written[i] !== undefined) await this.accCol.doc('c' + i).delete();
+        }
+        this.written.length = chunks.length;
+      });
+    }
+    saveFinding(f) { return this.serial('f:' + f.id, () => this.finCol.doc(f.id).set(f)); }
+    deleteFinding(id) { return this.serial('f:' + id, () => this.finCol.doc(id).delete()); }
+    async clear(findings) {
+      await this.saveAccounts([]);
+      for (const f of findings) await this.deleteFinding(f.id);
+      await this.serial('main', () => this.main.delete());
+    }
+  }
+
+  // This browser only (IndexedDB).
+  class IdbStore {
+    constructor(db) { this.kind = 'local'; this.db = db; }
+    static open() {
+      return new Promise((resolve, reject) => {
+        const r = indexedDB.open('sister-protects', 1);
+        r.onupgradeneeded = () => {
+          const db = r.result;
+          if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+          if (!db.objectStoreNames.contains('findings')) db.createObjectStore('findings', { keyPath: 'id' });
+        };
+        r.onsuccess = () => resolve(new IdbStore(r.result));
+        r.onerror = () => reject(r.error);
+        r.onblocked = () => reject(new Error('blocked'));
+      });
+    }
+    run(name, mode, fn) {
+      return new Promise((resolve, reject) => {
+        const tx = this.db.transaction(name, mode);
+        const req = fn(tx.objectStore(name));
+        tx.oncomplete = () => resolve(req ? req.result : undefined);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    }
+    async load() {
+      return {
+        main: (await this.run('kv', 'readonly', (s) => s.get('main'))) || null,
+        accounts: (await this.run('kv', 'readonly', (s) => s.get('accounts'))) || [],
+        findings: (await this.run('findings', 'readonly', (s) => s.getAll())) || [],
+      };
+    }
+    saveMain(body) { return this.run('kv', 'readwrite', (s) => s.put(body, 'main')); }
+    saveAccounts(list) { return this.run('kv', 'readwrite', (s) => s.put(clone(list), 'accounts')); }
+    saveFinding(f) { return this.run('findings', 'readwrite', (s) => s.put(f)); }
+    deleteFinding(id) { return this.run('findings', 'readwrite', (s) => s.delete(id)); }
+    async clear() {
+      await this.run('kv', 'readwrite', (s) => s.clear());
+      await this.run('findings', 'readwrite', (s) => s.clear());
+    }
+  }
+
+  class MemoryStore {
+    constructor() { this.kind = 'memory'; }
+    async load() { return { main: null, accounts: [], findings: [] }; }
+    async saveMain() {}
+    async saveAccounts() {}
+    async saveFinding() {}
+    async deleteFinding() {}
+    async clear() {}
+  }
+
+  async function pickStore() {
+    if (window.claude && typeof window.claude.use === 'function') {
+      try {
+        const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
+        const id = db && user ? await user.id() : null;
+        if (id) return new DbStore(db, id);
+      } catch { /* fall back to this browser */ }
+    }
+    try {
+      if (window.indexedDB) return await withTimeout(IdbStore.open(), 5000);
+    } catch { /* storage blocked */ }
+    return new MemoryStore();
+  }
+
+  /* ================= state ================= */
+  const TABS = ['her', 'accounts', 'scan', 'findings'];
+  const STATUS = ['todo', 'clear', 'found'];
+  const STATUS_TEXT = { todo: 'not checked', clear: 'nothing found', found: 'found something' };
+  const state = {
+    target: { handles: [], names: [], words: [] },
+    settings: { careful: false },
+    accounts: [],
+    findings: [],
+    tab: 'her',
+    filter: 'todo',
+    query: '',
+    open: '',
+    importer: null,
+    scan: { items: [], running: false, stopped: false, note: '' },
+    reader: null,
+    readerState: 'checking',
+    claudeProblem: '',
+    storeState: 'loading',
+    saveError: '',
+    canDownload: !window.claude,
+    confirmClear: false,
+    manual: null,
+    copyText: '',
+  };
+  let store = new MemoryStore();
+  let readerReady = Promise.resolve();
+  let loaded = false;
+
+  function sanitizeAccount(a) {
+    const u = cleanHandle(a && a.u);
+    if (!u) return null;
+    return {
+      u,
+      name: typeof a.name === 'string' ? a.name.slice(0, 80) : '',
+      s: STATUS.includes(a.s) ? a.s : 'todo',
+      note: typeof a.note === 'string' ? a.note.slice(0, 500) : '',
+      src: ['following', 'followers', 'both'].includes(a.src) ? a.src : 'following',
+      shots: Number(a.shots) || 0,
+      added: Number(a.added) || Date.now(),
+      checked: Number(a.checked) || 0,
+      auto: a.auto === true,
+    };
+  }
+  function sanitizeFinding(f) {
+    if (!f || typeof f.id !== 'string' || !/^[A-Za-z0-9_.~:@+-]{1,80}$/.test(f.id)) return null;
+    return {
+      id: f.id,
+      created: Number(f.created) || Date.now(),
+      account: cleanHandle(f.account),
+      level: ['match', 'possible', 'manual'].includes(f.level) ? f.level : 'possible',
+      hits: (Array.isArray(f.hits) ? f.hits : []).slice(0, 8).map((h) => ({
+        kind: KIND_LABEL[h && h.kind] ? h.kind : 'appears',
+        level: h && h.level === 'match' ? 'match' : h && h.level === 'manual' ? 'manual' : 'possible',
+        text: String((h && h.text) || '').slice(0, 300),
+        who: String((h && h.who) || '').slice(0, 40),
+      })),
+      file: String(f.file || '').slice(0, 120),
+      thumb: typeof f.thumb === 'string' && f.thumb.startsWith('data:image/') ? f.thumb : '',
+      note: String(f.note || '').slice(0, 1000),
+      source: f.source === 'ocr' ? 'ocr' : f.source === 'claude' ? 'claude' : 'manual',
+      screen: String(f.screen || '').slice(0, 40),
+    };
+  }
+  function applyLoaded(data) {
+    const main = data && data.main;
+    if (main && main.target) {
+      state.target = {
+        handles: parseHandles((main.target.handles || []).join(',')),
+        names: parsePhrases((main.target.names || []).join(',')),
+        words: parsePhrases((main.target.words || []).join(',')),
+      };
+    }
+    if (main && main.settings) state.settings.careful = main.settings.careful === true;
+    const seen = new Set();
+    state.accounts = (data.accounts || []).map(sanitizeAccount).filter((a) => a && !seen.has(a.u) && seen.add(a.u));
+    state.findings = (data.findings || []).map(sanitizeFinding).filter(Boolean);
+  }
+
+  async function safeSave(fn) {
+    if (!loaded) return;
+    try {
+      await fn();
+      if (state.saveError) { state.saveError = ''; renderBanner(); }
+    } catch (e) {
+      state.saveError = e && e.code === 'quota_exceeded'
+        ? 'Your saved space is full. Remove some findings you no longer need, then try again.'
+        : "Couldn't save your latest change. Check your connection. It will try again with your next change.";
+      renderBanner();
+    }
+  }
+  const saveMainSoon = debounce(() => safeSave(() => store.saveMain({ v: 1, target: state.target, settings: state.settings, updated: Date.now() })), 400);
+  const saveAccountsSoon = debounce(() => safeSave(() => store.saveAccounts(state.accounts)), 700);
+  const flushSaves = () => { saveMainSoon.flush(); saveAccountsSoon.flush(); };
+  const saveFinding = (f) => safeSave(() => store.saveFinding(f));
+  const noteTimers = new Map();
+
+  const accountMap = () => new Map(state.accounts.map((a) => [a.u, a]));
+  const isSure = (f) => f.level !== 'possible';
+  const hasTarget = () => state.target.handles.length + state.target.names.length + state.target.words.length > 0;
+
+  /* ================= rendering ================= */
+  function setTab(tab) {
+    if (!TABS.includes(tab)) tab = 'her';
+    state.tab = tab;
+    for (const b of $$('.tabs [role="tab"]')) {
+      const on = b.dataset.tab === tab;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    for (const p of $$('[role="tabpanel"]')) p.hidden = p.id !== 'tab-' + tab;
+    try { sessionStorage.setItem('sp-tab', tab); } catch { /* not available */ }
+    renderTab();
+    window.scrollTo(0, 0);
+  }
+  function renderAll() {
+    renderHeader();
+    renderBanner();
+    renderTab();
+  }
+  function renderTab() {
+    if (state.tab === 'her') renderHer();
+    else if (state.tab === 'accounts') renderAccounts();
+    else if (state.tab === 'scan') renderScan();
+    else renderFindings();
+  }
+  function renderHeader() {
+    const total = state.accounts.length;
+    const done = state.accounts.filter((a) => a.s !== 'todo').length;
+    const h = state.target.handles;
+    const el = $('#top-status');
+    if (state.storeState === 'loading') el.textContent = 'Loading your saved work…';
+    else if (!h.length) el.textContent = 'Start by adding her username';
+    else {
+      el.innerHTML = `Looking for ${h.map((x) => `<span class="handle">@${esc(x)}</span>`).join(', ')}${total ? ` · ${done.toLocaleString()} of ${total.toLocaleString()} checked` : ''}`;
+    }
+    $('#meter-fill').style.width = total ? `${(done / total) * 100}%` : '0';
+    $('#count-accounts').textContent = total ? total.toLocaleString() : '';
+    const cf = $('#count-findings');
+    cf.textContent = state.findings.length ? String(state.findings.length) : '';
+    cf.classList.toggle('alert', state.findings.some(isSure));
+  }
+  function renderBanner() {
+    const msgs = [];
+    if (state.storeState === 'failed') msgs.push(["Your saved work couldn't be loaded. Check your connection, then reload this page. Changes you make now won't be saved.", 'bad']);
+    if (state.saveError) msgs.push([state.saveError, 'bad']);
+    $('#banner-slot').innerHTML = msgs.map(([m, c]) => `<p class="banner ${c}" role="alert" style="margin-top:16px">${esc(m)}</p>`).join('');
+  }
+
+  function readerText() {
+    switch (state.readerState) {
+      case 'claude': return ['Screenshots are read by Claude. The first time, Claude asks you to allow this page. Each screenshot uses a little of your Claude usage.', 'good'];
+      case 'ocr': return [`${state.claudeProblem ? state.claudeProblem + ' ' : ''}Screenshots are read on this device, so they never leave it. The reader downloads once (about 7 MB) and is slower and less exact than Claude.`, 'warn'];
+      case 'none': return ["Automatic reading isn't working here. You can still keep your checklist and save screenshots by hand.", 'bad'];
+      default: return ['Checking how screenshots can be read…', ''];
+    }
+  }
+  function storeText() {
+    switch (state.storeState) {
+      case 'claude': return ["Your work is saved privately to your Claude account. People you share this page with can't see it.", 'good'];
+      case 'local': return ["Your work is saved in this browser only. Nothing backs it up, so download a backup now and then.", 'warn'];
+      case 'memory': return ["This browser won't let the page save anything. Download a backup before you close it.", 'bad'];
+      case 'failed': return ["Your saved work couldn't be loaded, so nothing is being saved right now.", 'bad'];
+      default: return ['Loading your saved work…', ''];
+    }
+  }
+  function setStatusLine(el, [text, tone]) {
+    el.textContent = text;
+    if (tone) el.dataset.tone = tone; else delete el.dataset.tone;
+  }
+  function chipList(list, at) {
+    return list.map((x) => `<span class="chip">${at ? '@' : ''}${esc(x)}</span>`).join('');
+  }
+  function renderHer() {
+    const t = state.target;
+    const fields = [['#t-handles', t.handles], ['#t-names', t.names], ['#t-words', t.words]];
+    for (const [sel, list] of fields) {
+      const el = $(sel);
+      if (document.activeElement !== el && !el.dataset.dirty) el.value = list.join(', ');
+    }
+    $('#chips-handles').innerHTML = chipList(t.handles, true);
+    $('#chips-names').innerHTML = chipList(t.names, false);
+    $('#chips-words').innerHTML = chipList(t.words, false);
+    $('#target-fields').disabled = !loaded;
+    setStatusLine($('#reader-status'), readerText());
+    setStatusLine($('#store-status'), storeText());
+    $('#careful-wrap').hidden = state.readerState !== 'claude';
+    $('#careful').checked = state.settings.careful;
+    $('#btn-backup').hidden = !state.canDownload;
+    $('#clear-box').innerHTML = state.confirmClear
+      ? `<div class="banner bad stack"><p><b>Delete everything?</b> Her usernames, the account list and all findings will be removed ${state.storeState === 'claude' ? 'from your Claude account' : 'from this browser'}. This can't be undone.</p>
+         <div class="row"><button class="btn small danger-solid" type="button" data-action="clear-yes">Yes, delete everything</button><button class="btn small" type="button" data-action="clear-no">Cancel</button></div></div>`
+      : `<button class="btn small quiet danger" type="button" data-action="clear-all">Clear everything</button>`;
+  }
+
+  /* ---- accounts ---- */
+  function findingCounts() {
+    const m = new Map();
+    for (const f of state.findings) {
+      if (!f.account) continue;
+      const c = m.get(f.account) || { sure: 0, possible: 0 };
+      if (isSure(f)) c.sure++; else c.possible++;
+      m.set(f.account, c);
+    }
+    return m;
+  }
+  function acctRow(a, fc) {
+    const open = state.open === a.u;
+    const subs = [];
+    if (a.name) subs.push(`<span>${esc(a.name)}</span>`);
+    if (a.src === 'followers') subs.push('<span>follows her</span>');
+    if (a.src === 'both') subs.push('<span>follows her, and she follows them</span>');
+    if (a.shots) subs.push(`<span>${plural(a.shots, 'screenshot')} scanned</span>`);
+    if (fc && fc.sure) subs.push(`<span class="t-red">${plural(fc.sure, 'finding')}</span>`);
+    if (fc && fc.possible) subs.push(`<span class="t-amber">${fc.possible} possible</span>`);
+    const mark = a.s === 'clear' ? '✓' : a.s === 'found' ? '!' : '';
+    return `<li class="acct" data-acct="${esc(a.u)}">
+      <div class="acct-row">
+        <button class="acct-main" type="button" data-action="toggle-acct" aria-expanded="${open}">
+          <span class="st ${a.s}" aria-hidden="true">${mark}</span>
+          <span class="handle">@${esc(a.u)}<span class="sr-only">, ${STATUS_TEXT[a.s]}</span></span>
+          ${subs.length ? `<span class="sub">${subs.join('')}</span>` : ''}
+        </button>
+        <a class="btn small" href="https://www.instagram.com/${encodeURIComponent(a.u)}/" target="_blank" rel="noopener noreferrer">Open<span class="sr-only"> @${esc(a.u)} on Instagram</span> ↗</a>
+      </div>
+      ${open ? `<div class="acct-more">
+        <div class="row" role="group" aria-label="What you found on @${esc(a.u)}">
+          <button class="btn small" type="button" data-action="set-status" data-s="clear" aria-pressed="${a.s === 'clear'}">✓ Nothing found</button>
+          <button class="btn small" type="button" data-action="set-status" data-s="found" aria-pressed="${a.s === 'found'}">! Found something</button>
+          <button class="btn small" type="button" data-action="set-status" data-s="todo" aria-pressed="${a.s === 'todo'}">Not checked</button>
+        </div>
+        <div class="field"><label for="note-${esc(a.u)}">Notes</label><textarea id="note-${esc(a.u)}" data-note="${esc(a.u)}" rows="2" maxlength="500" placeholder="What you saw, what's left to look at">${esc(a.note)}</textarea></div>
+        <div class="row">
+          <button class="btn small" type="button" data-action="scan-this">Scan screenshots from this account</button>
+          <button class="btn small quiet" type="button" data-action="remove-acct">Remove from list</button>
+        </div>
+      </div>` : ''}
+    </li>`;
+  }
+  function renderAccounts() {
+    renderImporter();
+    const counts = { todo: 0, found: 0, clear: 0 };
+    for (const a of state.accounts) counts[a.s]++;
+    const filters = [['todo', 'To check', counts.todo], ['found', 'Found', counts.found], ['clear', 'Nothing found', counts.clear], ['all', 'All', state.accounts.length]];
+    $('#filters').innerHTML = filters.map(([f, label, n]) => `<button class="btn small" type="button" data-action="filter" data-f="${f}" aria-pressed="${state.filter === f}">${label} <span class="count">${n.toLocaleString()}</span></button>`).join('');
+    renderAccountList();
+  }
+  function renderAccountList() {
+    const q = fold(state.query).replace(/^@/, '').trim();
+    const fc = findingCounts();
+    const list = state.accounts.filter((a) => (state.filter === 'all' || a.s === state.filter) && (!q || a.u.includes(q) || fold(a.name).includes(q)));
+    $('#acct-list').innerHTML = list.map((a) => acctRow(a, fc.get(a.u))).join('');
+    const empty = $('#acct-empty');
+    empty.hidden = list.length > 0;
+    if (!state.accounts.length) empty.textContent = 'No accounts yet. On her profile, tap Following, take screenshots as you scroll down the list, then tap "Add from screenshots".';
+    else if (q) empty.textContent = 'No account on your list matches that.';
+    else if (state.filter === 'todo') empty.textContent = 'Every account has been checked.';
+    else empty.textContent = 'None here yet.';
+  }
+  function renderImporter() {
+    const box = $('#import-box');
+    const im = state.importer;
+    if (!im) { box.innerHTML = ''; box.dataset.phase = ''; return; }
+    if (im.phase === 'paste') {
+      if (box.dataset.phase === 'paste') return; // keep what's being typed
+      box.innerHTML = `<div class="card stack">
+        <h3>Paste a list</h3>
+        <label for="paste-text" class="hint" style="font-weight:400">One account per line, or separated by commas. Anything after the username on a line is ignored.</label>
+        <textarea id="paste-text" rows="7" placeholder="first.account&#10;second_account"></textarea>
+        <div class="row"><button class="btn primary" type="button" data-action="paste-check">Check the list</button><button class="btn" type="button" data-action="import-cancel">Cancel</button></div>
+      </div>`;
+    } else if (im.phase === 'reading') {
+      const pct = im.total ? Math.round((im.done / im.total) * 100) : 0;
+      box.innerHTML = `<div class="card stack" aria-live="polite">
+        <h3>Reading ${plural(im.total, 'screenshot')}…</h3>
+        <div class="bar"><span style="width:${pct}%"></span></div>
+        <p class="hint">${im.done} of ${im.total} read · ${plural(im.found.size, 'account')} found so far</p>
+        <div class="row"><button class="btn small" type="button" data-action="import-stop">Stop</button></div>
+      </div>`;
+    } else {
+      const fresh = im.candidates.filter((c) => !c.exists);
+      const existing = im.candidates.length - fresh.length;
+      const picked = fresh.filter((c) => c.on).length;
+      box.innerHTML = `<div class="card stack">
+        <h3>${fresh.length ? `Found ${plural(fresh.length, 'new account')}` : 'No new accounts found'}</h3>
+        ${im.note ? `<p class="banner">${esc(im.note)}</p>` : ''}
+        <p class="hint">${existing ? `${plural(existing, 'account')} ${existing === 1 ? 'is' : 'are'} already on your list. ` : ''}${fresh.length ? 'Tap any that look wrong to leave them out.' : 'Try clearer screenshots of the list, or paste the usernames.'}</p>
+        ${fresh.length ? `<div class="field"><label for="import-src">These are</label><select id="import-src"><option value="following">accounts she follows</option><option value="followers">accounts that follow her</option></select></div>
+        <div class="chips" id="pick-chips">${fresh.map((c) => `<button type="button" class="chip" data-action="pick" data-u="${esc(c.u)}" aria-pressed="${c.on}">@${esc(c.u)}</button>`).join('')}</div>` : ''}
+        <div class="row">${fresh.length ? `<button class="btn primary" type="button" data-action="import-add" id="import-add" ${picked ? '' : 'disabled'}>Add ${plural(picked, 'account')}</button>` : ''}<button class="btn" type="button" data-action="import-cancel">${fresh.length ? 'Cancel' : 'Close'}</button></div>
+      </div>`;
+      const sel = $('#import-src');
+      if (sel) sel.value = im.src || 'following';
+    }
+    box.dataset.phase = im.phase;
+  }
+
+  /* ---- scan ---- */
+  function renderScan() {
+    $('#acct-options').innerHTML = state.accounts.map((a) => `<option value="@${esc(a.u)}"></option>`).join('');
+    setStatusLine($('#reader-line'), readerText());
+    renderScanProgress();
+    $('#shot-list').innerHTML = state.scan.items.slice().reverse().map(shotHtml).join('');
+  }
+  function renderShot(it) {
+    const el = document.getElementById('shot-' + it.id);
+    if (el && state.tab === 'scan') el.outerHTML = shotHtml(it);
+  }
+  function hitLine(h) {
+    const label = esc(KIND_LABEL[h.kind] || 'Match');
+    return h.text ? `${label}: “${highlight(h.text, h.level === 'match' ? 'hl red' : 'hl')}”` : label;
+  }
+  function shotHtml(it) {
+    let cls = 'wait'; let head = 'Waiting'; let body = '';
+    if (it.status === 'reading') head = 'Reading…';
+    else if (it.status === 'hit') { cls = it.level === 'match' ? 'hit' : 'possible'; head = it.level === 'match' ? 'Found her' : 'Possible match'; body = it.hits.slice(0, 2).map(hitLine).join('<br>'); }
+    else if (it.status === 'none') { cls = 'none'; head = 'Nothing about her'; }
+    else if (it.status === 'unreadable') { cls = 'err'; head = "Couldn't read it"; body = 'It looks too blurry or cut off.'; }
+    else if (it.status === 'error') { cls = 'err'; head = "Couldn't read it"; body = esc(it.error); }
+    else if (it.status === 'dismissed') { cls = 'none'; head = 'Removed from Findings'; }
+    const acct = it.account || it.from;
+    const acts = [];
+    if (it.status === 'hit') acts.push('<button class="link" type="button" data-action="goto" data-to="findings">See in Findings</button>');
+    if (it.status === 'none' || it.status === 'unreadable') acts.push(`<button class="link" type="button" data-action="shot-save">${it.saved ? 'Saved' : 'Save anyway'}</button>`);
+    if (['none', 'unreadable', 'error'].includes(it.status) && !state.scan.running) acts.push('<button class="link" type="button" data-action="shot-retry">Read again</button>');
+    return `<li class="shot ${cls}" id="shot-${it.id}" data-sid="${it.id}">
+      <button class="shot-img" type="button" data-action="view-shot" aria-label="View ${esc(it.name)}"><img src="${it.url}" alt="" loading="lazy"></button>
+      <div class="shot-body">
+        <p class="shot-head"><span class="state">${head}</span>${acct ? `<span class="handle">@${esc(acct)}</span>` : ''}</p>
+        ${body ? `<p class="shot-text">${body}</p>` : ''}
+        <p class="shot-file">${esc(it.name)}</p>
+        ${acts.length ? `<p class="shot-acts">${acts.join('')}</p>` : ''}
+        ${it.rr ? `<details><summary>What was read</summary><pre class="read">${esc(transcript(it.rr))}</pre></details>` : ''}
+      </div>
+    </li>`;
+  }
+  function transcript(rr) {
+    const out = [];
+    if (rr.account) out.push(`Account: @${rr.account}`);
+    if (rr.screen) out.push(`Screen: ${rr.screen.replace(/_/g, ' ')}`);
+    for (const e of rr.entries || []) out.push(e.author ? `@${e.author} (${e.type.replace(/_/g, ' ')}): ${e.text}` : e.text);
+    if (rr.listed && rr.listed.length) out.push('List: ' + rr.listed.map((u) => '@' + u).join(', '));
+    if (rr.otherText) out.push(rr.otherText);
+    return out.join('\n') || '(no text)';
+  }
+  function renderScanProgress() {
+    const box = $('#scan-progress');
+    const items = state.scan.items;
+    if (!items.length) { box.innerHTML = state.scan.note ? `<p class="banner">${esc(state.scan.note)}</p>` : ''; return; }
+    const n = items.length;
+    const left = items.filter((i) => i.status === 'queued').length;
+    const busy = items.filter((i) => i.status === 'reading').length;
+    const done = n - left - busy;
+    const found = items.filter((i) => i.status === 'hit').length;
+    let head;
+    if (state.scan.running) head = `<p class="strong">Reading ${Math.min(done + 1, n)} of ${n}</p><button class="btn small" type="button" data-action="scan-stop">Stop</button>`;
+    else if (left) head = `<p class="strong">Paused · ${plural(left, 'screenshot')} left</p><button class="btn small primary" type="button" data-action="scan-resume">Resume</button>`;
+    else head = `<p class="strong">Done · ${plural(n, 'screenshot')} read</p><span class="row"><button class="btn small" type="button" data-action="scan-recheck">Check again with current names</button><button class="btn small" type="button" data-action="scan-clear">Clear this list</button></span>`;
+    box.innerHTML = `<div class="card stack" aria-live="polite">
+      <div class="row spread">${head}</div>
+      <div class="bar"><span style="width:${Math.round((done / n) * 100)}%"></span></div>
+      <p class="hint">${found ? `<b class="t-red">${plural(found, 'screenshot')} with her</b>` : 'None with her so far.'}</p>
+      ${state.scan.note ? `<p class="banner">${esc(state.scan.note)}</p>` : ''}
+    </div>`;
+  }
+
+  /* ---- findings ---- */
+  function highlight(text, cls) {
+    const t = state.target;
+    const terms = [...t.handles.map((h) => '@?' + reEsc(h)), ...t.names.map(reEsc), ...t.words.map(reEsc)].filter((x) => x.length >= 2);
+    if (!terms.length) return esc(text);
+    terms.sort((a, b) => b.length - a.length);
+    const re = new RegExp(`(${terms.join('|')})`, 'gi');
+    return String(text).split(re).map((part, i) => (i % 2 ? `<mark class="${cls}">${esc(part)}</mark>` : esc(part))).join('');
+  }
+  function findingHtml(f) {
+    const kinds = [...new Set(f.hits.map((h) => h.kind))].filter((k) => k !== 'photo').sort((a, b) => KIND_ORDER.indexOf(a) - KIND_ORDER.indexOf(b));
+    const pill = f.level === 'match' ? '<span class="pill match">Found</span>' : f.level === 'possible' ? '<span class="pill possible">Possible</span>' : '<span class="pill manual">Saved by you</span>';
+    const quotes = f.hits.filter((h) => h.text).slice(0, 3).map((h) => `<p class="said">${h.who ? `<span class="handle">@${esc(h.who)}</span>` : ''}${highlight(h.text, h.level === 'match' ? 'hl red' : 'hl')}</p>`).join('');
+    const fid = esc(f.id);
+    return `<li class="finding" data-fid="${fid}">
+      ${f.thumb ? `<button class="thumb-btn" type="button" data-action="view-finding" aria-label="View the screenshot"><img class="thumb" src="${f.thumb}" alt=""></button>` : '<div class="thumb" aria-hidden="true"></div>'}
+      <div class="finding-body">
+        <div class="badges">${pill}${kinds.map((k) => `<span class="pill kind">${esc(KIND_LABEL[k])}</span>`).join('')}</div>
+        ${quotes}
+        <p class="meta">${day(f.created)}${f.file ? ` · ${esc(f.file)}` : ''}${f.source === 'ocr' ? ' · read on this device' : ''}</p>
+        <label class="sr-only" for="fnote-${fid}">Note</label>
+        <textarea id="fnote-${fid}" data-fnote="${fid}" rows="2" maxlength="1000" placeholder="Add a note">${esc(f.note)}</textarea>
+        <div class="row">
+          ${f.level === 'possible' ? `<button class="btn small" type="button" data-action="f-confirm">It's her</button>` : ''}
+          <button class="btn small quiet" type="button" data-action="f-remove">${f.level === 'manual' ? 'Remove' : 'Not her, remove'}</button>
+        </div>
+      </div>
+    </li>`;
+  }
+  function groupFindings() {
+    const groups = new Map();
+    for (const f of [...state.findings].sort((a, b) => b.created - a.created)) {
+      const k = f.account || '';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(f);
+    }
+    return [...groups.entries()].sort(([ka, a], [kb, b]) => (b.some(isSure) - a.some(isSure)) || (ka ? (kb ? ka.localeCompare(kb) : -1) : 1));
+  }
+  function renderFindings() {
+    const fs = state.findings;
+    const sure = fs.filter(isSure);
+    const maybe = fs.length - sure.length;
+    const nAcct = new Set(sure.map((f) => f.account || '?')).size;
+    $('#find-summary').innerHTML = fs.length
+      ? `<b>${plural(sure.length, 'finding')}</b>${sure.length ? ` in ${plural(nAcct, 'account')}` : ''}${maybe ? ` · <span class="t-amber">${maybe} possible to check</span>` : ''}`
+      : 'Nothing yet. When a screenshot shows her, it lands here with what was found.';
+    $('#btn-report').hidden = !state.canDownload;
+    $('#copy-box').innerHTML = state.copyText
+      ? `<div class="card stack"><label for="copy-out">Copying isn't allowed here. Press and hold (or select all) to copy the summary yourself.</label><textarea id="copy-out" class="copy-out" readonly>${esc(state.copyText)}</textarea><div class="row"><button class="btn small" type="button" data-action="copy-close">Done</button></div></div>`
+      : '';
+    renderManual();
+    const known = accountMap();
+    $('#find-groups').innerHTML = fs.length
+      ? groupFindings().map(([u, list]) => `<section class="group">
+          <div class="group-head"><h3>${u ? `<span class="handle">@${esc(u)}</span>` : 'Account not known'}</h3>
+            ${u ? `<a class="link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener noreferrer">Open on Instagram ↗</a>` : ''}
+            ${u && !known.has(u) ? `<span class="hint">${state.target.handles.includes(u) ? 'her own account' : 'not on your list'}</span>` : ''}</div>
+          <ul class="findings">${list.map(findingHtml).join('')}</ul>
+        </section>`).join('')
+      : '';
+  }
+  function renderManual() {
+    const box = $('#manual-box');
+    const m = state.manual;
+    if (!m) { box.innerHTML = ''; return; }
+    if (box.dataset.id === m.id) return;
+    box.dataset.id = m.id;
+    box.innerHTML = `<div class="card stack">
+      <h3>Save a screenshot by hand</h3>
+      <img class="manual-prev" src="${m.url}" alt="The screenshot you picked">
+      <div class="field"><label for="manual-acct">Which account is it from?</label><input type="text" id="manual-acct" list="acct-options" placeholder="@account" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div class="field"><label for="manual-note">What does it show?</label><textarea id="manual-note" rows="2" maxlength="1000" placeholder="For example: a photo of her at the party"></textarea></div>
+      <div class="row"><button class="btn primary" type="button" data-action="manual-save">Save finding</button><button class="btn" type="button" data-action="manual-cancel">Cancel</button></div>
+    </div>`;
+  }
+
+  /* ---- viewer and toast ---- */
+  function openViewer(src) {
+    $('#viewer-img').src = src;
+    $('#viewer').hidden = false;
+    $('.viewer-close').focus();
+  }
+  function closeViewer() {
+    $('#viewer').hidden = true;
+    $('#viewer-img').removeAttribute('src');
+  }
+  let toastTimer = null;
+  let toastUndo = null;
+  function toast(msg, undo) {
+    $('#toast-msg').textContent = msg;
+    toastUndo = undo || null;
+    $('#toast-act').hidden = !undo;
+    $('#toast').hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { $('#toast').hidden = true; toastUndo = null; }, undo ? 7000 : 3500);
+  }
+
+  /* ================= actions ================= */
+  function onTargetInput(e) {
+    const el = e.target;
+    el.dataset.dirty = '1';
+    const t = state.target;
+    if (el.id === 't-handles') t.handles = parseHandles(el.value);
+    if (el.id === 't-names') t.names = parsePhrases(el.value);
+    if (el.id === 't-words') t.words = parsePhrases(el.value);
+    $('#chips-handles').innerHTML = chipList(t.handles, true);
+    $('#chips-names').innerHTML = chipList(t.names, false);
+    $('#chips-words').innerHTML = chipList(t.words, false);
+    $('#target-saved').textContent = '';
+    saveMainSoon();
+    renderHeader();
+  }
+
+  function addAccounts(list, src) {
+    const map = accountMap();
+    let added = 0;
+    for (const c of list) {
+      if (state.target.handles.includes(c.u)) continue;
+      const ex = map.get(c.u);
+      if (ex) {
+        if (ex.src !== src) ex.src = 'both';
+        if (!ex.name && c.name) ex.name = c.name;
+        continue;
+      }
+      const a = { u: c.u, name: (c.name || '').slice(0, 80), s: 'todo', note: '', src, shots: 0, added: Date.now(), checked: 0, auto: false };
+      state.accounts.push(a);
+      map.set(a.u, a);
+      added++;
+    }
+    saveAccountsSoon();
+    renderHeader();
+    return added;
+  }
+  function setStatus(u, s, auto) {
+    const a = state.accounts.find((x) => x.u === u);
+    if (!a || !STATUS.includes(s)) return;
+    a.s = s;
+    a.auto = Boolean(auto);
+    a.checked = s === 'todo' ? 0 : Date.now();
+    saveAccountsSoon();
+  }
+  // Keep an account's "found" mark in step with its findings when the page set it.
+  function syncAccount(u) {
+    const a = u && state.accounts.find((x) => x.u === u);
+    if (!a) return;
+    const sure = state.findings.some((f) => f.account === u && isSure(f));
+    if (sure && a.s !== 'found') setStatus(u, 'found', true);
+    else if (!sure && a.s === 'found' && a.auto) setStatus(u, 'todo', false);
+  }
+
+  async function importFromScreens(files) {
+    if (state.importer && state.importer.phase === 'reading') return;
+    const im = { phase: 'reading', total: files.length, done: 0, found: new Map(), lists: {}, note: '', errors: 0, stopped: false, ctl: null };
+    state.importer = im;
+    renderImporter();
+    let reader = null;
+    try {
+      reader = await getReader();
+    } catch (e) {
+      im.note = errText(e);
+    }
+    for (const f of reader ? files : []) {
+      if (im.stopped) break;
+      im.ctl = new AbortController();
+      try {
+        const res = await reader.readList(f, im.ctl.signal);
+        for (const a of res.accounts) if (!im.found.has(a.u)) im.found.set(a.u, a);
+        if (res.list) im.lists[res.list] = (im.lists[res.list] || 0) + 1;
+      } catch (e) {
+        const how = classify(e);
+        if (how === 'cancel') break;
+        if (how === 'pause' || how === 'fatal') {
+          if (how === 'fatal') demoteReader(e);
+          im.note = `${how === 'fatal' ? (ERR[e.code] || '') + ' Try adding the screenshots again to use the on-device reader.' : errText(e)} ${plural(im.total - im.done, 'screenshot')} weren't read.`;
+          break;
+        }
+        im.errors++;
+      }
+      im.done++;
+      if (state.importer === im && state.tab === 'accounts') renderImporter();
+    }
+    if (state.importer !== im) return;
+    const have = new Set(state.accounts.map((a) => a.u));
+    im.candidates = [...im.found.values()].filter((c) => !state.target.handles.includes(c.u)).map((c) => ({ ...c, on: true, exists: have.has(c.u) }));
+    im.src = (im.lists.followers || 0) > (im.lists.following || 0) ? 'followers' : 'following';
+    if (im.errors) im.note = `${im.note ? im.note + ' ' : ''}${plural(im.errors, 'screenshot')} couldn't be read.`;
+    im.phase = 'review';
+    if (state.tab === 'accounts') renderImporter();
+  }
+
+  async function getReader() {
+    await readerReady;
+    if (state.reader === ClaudeReader) return ClaudeReader;
+    if (state.readerState === 'none') {
+      state.readerState = 'ocr'; // let it try again, e.g. after the connection is back
+    }
+    try {
+      await OcrReader.ensure();
+      state.reader = OcrReader;
+      state.readerState = 'ocr';
+      return OcrReader;
+    } catch (e) {
+      state.readerState = 'none';
+      renderStatusLines();
+      throw e && e.code ? e : { code: 'no_reader' };
+    }
+  }
+  function demoteReader(e) {
+    state.reader = OcrReader;
+    state.readerState = 'ocr';
+    state.claudeProblem = ERR[e && e.code] || "Claude can't read screenshots here.";
+    renderStatusLines();
+  }
+  function renderStatusLines() {
+    if (state.tab === 'her') {
+      setStatusLine($('#reader-status'), readerText());
+      $('#careful-wrap').hidden = state.readerState !== 'claude';
+    }
+    if (state.tab === 'scan') setStatusLine($('#reader-line'), readerText());
+  }
+
+  const scanCtls = new Set();
+  function startScan(files) {
+    if (!hasTarget()) {
+      toast('Add her username on step 1 first.');
+      setTab('her');
+      $('#t-handles').focus();
+      return;
+    }
+    const from = cleanHandle($('#scan-from').value);
+    for (const f of files) state.scan.items.push({ id: newId(), file: f, name: f.name || 'screenshot', from, status: 'queued', url: URL.createObjectURL(f) });
+    state.scan.note = '';
+    renderScan();
+    runQueue();
+  }
+  async function runQueue() {
+    if (state.scan.running) return;
+    state.scan.running = true;
+    state.scan.stopped = false;
+    if (state.tab === 'scan') renderScan();
+    try {
+      const reader = await getReader();
+      if (reader.id === 'ocr' && state.tab === 'scan') setStatusLine($('#reader-line'), readerText());
+      const lanes = reader.id === 'claude' ? 2 : 1;
+      await Promise.all(Array.from({ length: lanes }, () => lane(reader)));
+    } catch (e) {
+      state.scan.note = errText(e);
+    } finally {
+      state.scan.running = false;
+      if (state.tab === 'scan') renderScan();
+    }
+  }
+  async function lane(reader) {
+    while (!state.scan.stopped) {
+      const it = state.scan.items.find((i) => i.status === 'queued');
+      if (!it) return;
+      if (reader !== state.reader) return; // reader changed under us; Resume picks the new one
+      it.status = 'reading';
+      renderShot(it);
+      if (state.tab === 'scan') renderScanProgress();
+      const ctl = new AbortController();
+      scanCtls.add(ctl);
+      try {
+        const rr = await reader.read(it.file, ctl.signal, it.fresh);
+        it.fresh = false;
+        await onRead(it, rr);
+      } catch (e) {
+        const how = classify(e);
+        if (how === 'cancel') it.status = 'queued';
+        else if (how === 'pause' || how === 'fatal') {
+          it.status = 'queued';
+          state.scan.stopped = true;
+          if (how === 'fatal') {
+            demoteReader(e);
+            state.scan.note = `${ERR[e.code] || "Claude can't read screenshots here."} Tap Resume to read the rest on this device instead (slower and less exact).`;
+          } else state.scan.note = errText(e);
+        } else {
+          it.status = 'error';
+          it.error = errText(e);
+        }
+      } finally {
+        scanCtls.delete(ctl);
+      }
+      renderShot(it);
+      if (state.tab === 'scan') renderScanProgress();
+    }
+  }
+  async function onRead(it, rr) {
+    it.rr = rr;
+    const acct = it.from || cleanHandle(rr.account || '');
+    it.account = acct;
+    const a = acct && state.accounts.find((x) => x.u === acct);
+    if (a && !it.counted) { a.shots++; it.counted = true; saveAccountsSoon(); }
+    await applyHits(it);
+  }
+  async function applyHits(it) {
+    const hits = findMatches(it.rr, state.target);
+    it.hits = hits;
+    if (!hits.length) {
+      if (it.status !== 'hit') it.status = it.rr.unreadable ? 'unreadable' : 'none';
+      return;
+    }
+    const level = hits.some((h) => h.level === 'match') ? 'match' : 'possible';
+    let f = it.findingId && state.findings.find((x) => x.id === it.findingId);
+    if (!f) {
+      const thumb = await makeThumb(it.file, it.rr.source === 'ocr' ? hits.map((h) => h.box).filter(Boolean) : []).catch(() => '');
+      f = { id: 'f' + newId(), created: Date.now(), account: it.account || '', level, file: it.name, note: '', source: it.rr.source, screen: it.rr.screen || '', thumb, hits: [] };
+      state.findings.push(f);
+      it.findingId = f.id;
+    } else if (f.level === 'possible' && level === 'match') f.level = 'match';
+    it.status = 'hit';
+    it.level = level;
+    f.hits = hits.slice(0, 8).map(({ kind, level: l, text, who }) => ({ kind, level: l, text, who }));
+    saveFinding(f);
+    syncAccount(f.account);
+    renderHeader();
+  }
+
+  function addManualFinding(file, account, note) {
+    makeThumb(file, []).catch(() => '').then((thumb) => {
+      const f = { id: 'f' + newId(), created: Date.now(), account: cleanHandle(account), level: 'manual', file: file.name || 'screenshot', note: note || '', source: 'manual', screen: '', thumb, hits: [{ kind: 'photo', level: 'manual', text: '', who: '' }] };
+      state.findings.push(f);
+      saveFinding(f);
+      syncAccount(f.account);
+      renderHeader();
+      if (state.tab === 'findings') renderFindings();
+    });
+  }
+
+  function removeFinding(id) {
+    const i = state.findings.findIndex((f) => f.id === id);
+    if (i < 0) return;
+    const [f] = state.findings.splice(i, 1);
+    safeSave(() => store.deleteFinding(id));
+    syncAccount(f.account);
+    const linked = state.scan.items.filter((it) => it.findingId === id);
+    for (const it of linked) { it.findingId = null; it.status = 'dismissed'; }
+    renderHeader();
+    renderTab();
+    toast('Removed from Findings.', () => {
+      state.findings.splice(Math.min(i, state.findings.length), 0, f);
+      saveFinding(f);
+      syncAccount(f.account);
+      for (const it of linked) { it.findingId = id; it.status = 'hit'; }
+      renderHeader();
+      renderTab();
+    });
+  }
+
+  function reportText() {
+    const t = state.target;
+    const lines = [];
+    lines.push(`Sister Protects report, ${day(Date.now())}`);
+    lines.push(`Looking for: ${t.handles.map((h) => '@' + h).join(', ') || '(no username added)'}${t.names.length ? ` · names: ${t.names.join(', ')}` : ''}${t.words.length ? ` · keywords: ${t.words.join(', ')}` : ''}`);
+    const n = state.accounts.length;
+    const by = (s) => state.accounts.filter((a) => a.s === s);
+    lines.push(`Accounts on the list: ${n} · checked: ${n - by('todo').length} · something found: ${by('found').length} · not checked yet: ${by('todo').length}`);
+    const section = (title, fs) => {
+      if (!fs.length) return;
+      lines.push('', title);
+      const groups = new Map();
+      for (const f of fs) { const k = f.account || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(f); }
+      for (const [u, list] of groups) {
+        lines.push(u ? `@${u}` : 'Account not known');
+        for (const f of list.sort((a, b) => a.created - b.created)) {
+          const kinds = [...new Set(f.hits.map((h) => KIND_LABEL[h.kind]))].join(', ');
+          const quote = (f.hits.find((h) => h.text) || {}).text;
+          lines.push(`  - ${day(f.created)}: ${kinds}${quote ? `: "${quote}"` : ''}${f.file ? ` [${f.file}]` : ''}`);
+          if (f.note) lines.push(`    Note: ${f.note}`);
+        }
+      }
+    };
+    section('FOUND', state.findings.filter(isSure));
+    section('POSSIBLE (not confirmed yet)', state.findings.filter((f) => !isSure(f)));
+    const clear = by('clear');
+    if (clear.length) lines.push('', `Checked, nothing found: ${clear.map((a) => '@' + a.u).join(', ')}`);
+    const noted = state.accounts.filter((a) => a.note);
+    if (noted.length) { lines.push('', 'Notes on accounts:'); for (const a of noted) lines.push(`  @${a.u} (${STATUS_TEXT[a.s]}): ${a.note.replace(/\n/g, ' / ')}`); }
+    return lines.join('\n');
+  }
+
+  async function offerFile(filename, data, mime) {
+    if (window.claude) {
+      const dl = await window.claude.use('downloads').catch(() => null);
+      if (!dl) { toast("Downloads aren't available here. Use Copy summary instead."); return; }
+      try {
+        await dl.save({ filename, data });
+        toast('Saved.');
+      } catch (e) {
+        if (e && e.code !== 'declined') toast("The file couldn't be saved here. Try Copy summary instead.");
+      }
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([data], { type: mime }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function backupJson() {
+    return JSON.stringify({ app: 'sister-protects', version: 1, exported: new Date().toISOString(), target: state.target, settings: state.settings, accounts: state.accounts, findings: state.findings });
+  }
+  async function restoreBackup(file) {
+    let data;
+    try { data = JSON.parse(await file.text()); } catch { toast("That file isn't a Sister Protects backup."); return; }
+    if (!data || data.app !== 'sister-protects') { toast("That file isn't a Sister Protects backup."); return; }
+    const t = data.target || {};
+    state.target = {
+      handles: parseHandles([...state.target.handles, ...(t.handles || [])].join(',')),
+      names: parsePhrases([...state.target.names, ...(t.names || [])].join(',')),
+      words: parsePhrases([...state.target.words, ...(t.words || [])].join(',')),
+    };
+    const rankOf = { todo: 0, clear: 1, found: 2 };
+    const map = accountMap();
+    let addedA = 0;
+    for (const raw of data.accounts || []) {
+      const a = sanitizeAccount(raw);
+      if (!a) continue;
+      const ex = map.get(a.u);
+      if (!ex) { state.accounts.push(a); map.set(a.u, a); addedA++; continue; }
+      if (rankOf[a.s] > rankOf[ex.s]) { ex.s = a.s; ex.checked = a.checked; ex.auto = a.auto; }
+      if (a.note && !ex.note.includes(a.note)) ex.note = (ex.note ? ex.note + '\n' : '') + a.note;
+      ex.shots = Math.max(ex.shots, a.shots);
+    }
+    let addedF = 0;
+    for (const raw of data.findings || []) {
+      const f = sanitizeFinding(raw);
+      if (!f || state.findings.some((x) => x.id === f.id)) continue;
+      state.findings.push(f);
+      saveFinding(f);
+      addedF++;
+    }
+    for (const el of ['#t-handles', '#t-names', '#t-words']) delete $(el).dataset.dirty;
+    saveMainSoon();
+    saveAccountsSoon();
+    renderAll();
+    toast(`Restored: ${plural(addedA, 'account')} and ${plural(addedF, 'finding')} added.`);
+  }
+  async function clearEverything() {
+    const old = state.findings.slice();
+    state.target = { handles: [], names: [], words: [] };
+    state.accounts = [];
+    state.findings = [];
+    state.confirmClear = false;
+    for (const el of ['#t-handles', '#t-names', '#t-words']) { delete $(el).dataset.dirty; $(el).value = ''; }
+    try { await store.clear(old); } catch { /* reported below if saving keeps failing */ }
+    saveMainSoon();
+    renderAll();
+    toast('Everything was deleted.');
+  }
+
+  async function onAction(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const act = btn.dataset.action;
+    const u = btn.closest('[data-acct]') ? btn.closest('[data-acct]').dataset.acct : '';
+    const fid = btn.closest('[data-fid]') ? btn.closest('[data-fid]').dataset.fid : '';
+    const sid = btn.closest('[data-sid]') ? btn.closest('[data-sid]').dataset.sid : '';
+    const item = sid && state.scan.items.find((i) => i.id === sid);
+    const im = state.importer;
+    switch (act) {
+      case 'goto': setTab(btn.dataset.to); break;
+      case 'toggle-acct': {
+        state.open = state.open === u ? '' : u;
+        renderAccountList();
+        const again = $(`[data-acct="${CSS.escape(u)}"] .acct-main`);
+        if (again) again.focus();
+        break;
+      }
+      case 'set-status': {
+        setStatus(u, btn.dataset.s, false);
+        renderHeader();
+        renderAccounts();
+        const again = $(`[data-acct="${CSS.escape(u)}"] .acct-main`);
+        if (again) again.focus(); else toast(`@${u} marked "${STATUS_TEXT[btn.dataset.s]}".`);
+        break;
+      }
+      case 'remove-acct': {
+        const i = state.accounts.findIndex((a) => a.u === u);
+        if (i < 0) break;
+        const [a] = state.accounts.splice(i, 1);
+        saveAccountsSoon();
+        renderHeader();
+        renderAccounts();
+        toast(`Removed @${u}.`, () => { state.accounts.splice(Math.min(i, state.accounts.length), 0, a); saveAccountsSoon(); renderHeader(); renderTab(); });
+        break;
+      }
+      case 'scan-this': $('#scan-from').value = '@' + u; setTab('scan'); break;
+      case 'filter': state.filter = btn.dataset.f; renderAccounts(); break;
+      case 'show-paste': state.importer = { phase: 'paste' }; renderImporter(); $('#paste-text').focus(); break;
+      case 'paste-check': {
+        const list = parsePastedList($('#paste-text').value);
+        if (!list.length) { toast('No usernames found in that text.'); break; }
+        const have = new Set(state.accounts.map((a) => a.u));
+        state.importer = { phase: 'review', candidates: list.filter((x) => !state.target.handles.includes(x)).map((x) => ({ u: x, name: '', on: true, exists: have.has(x) })), note: '', src: 'following' };
+        renderImporter();
+        break;
+      }
+      case 'import-stop': if (im) { im.stopped = true; if (im.ctl) im.ctl.abort(); } break;
+      case 'import-cancel': if (im) { im.stopped = true; if (im.ctl) im.ctl.abort(); } state.importer = null; renderImporter(); break;
+      case 'pick': {
+        const c = im && im.candidates.find((x) => x.u === btn.dataset.u);
+        if (!c) break;
+        c.on = !c.on;
+        btn.setAttribute('aria-pressed', String(c.on));
+        const n = im.candidates.filter((x) => !x.exists && x.on).length;
+        const add = $('#import-add');
+        add.textContent = `Add ${plural(n, 'account')}`;
+        add.disabled = !n;
+        break;
+      }
+      case 'import-add': {
+        const src = ($('#import-src') || {}).value || 'following';
+        const n = addAccounts(im.candidates.filter((c) => !c.exists && c.on), src);
+        state.importer = null;
+        state.filter = 'todo';
+        renderAccounts();
+        toast(`Added ${plural(n, 'account')}.`);
+        break;
+      }
+      case 'scan-stop': state.scan.stopped = true; for (const c of scanCtls) c.abort(); break;
+      case 'scan-resume': state.scan.note = ''; runQueue(); break;
+      case 'scan-clear':
+        if (state.scan.running) break;
+        for (const it of state.scan.items) URL.revokeObjectURL(it.url);
+        state.scan.items = [];
+        state.scan.note = '';
+        renderScan();
+        break;
+      case 'scan-recheck': {
+        let n = 0;
+        for (const it of state.scan.items) {
+          if (!it.rr) continue;
+          const before = it.status;
+          await applyHits(it);
+          if (before !== 'hit' && it.status === 'hit') n++;
+        }
+        renderScan();
+        toast(n ? `${plural(n, 'more screenshot')} with her.` : 'No new matches.');
+        break;
+      }
+      case 'shot-retry':
+        if (!item) break;
+        item.status = 'queued';
+        item.fresh = true;
+        renderShot(item);
+        runQueue();
+        break;
+      case 'shot-save':
+        if (!item || item.saved) break;
+        item.saved = true;
+        addManualFinding(item.file, item.account || item.from, '');
+        renderShot(item);
+        toast('Saved to Findings. You can add a note there.');
+        break;
+      case 'view-shot': if (item) openViewer(item.url); break;
+      case 'view-finding': { const f = state.findings.find((x) => x.id === fid); if (f && f.thumb) openViewer(f.thumb); break; }
+      case 'close-viewer': closeViewer(); break;
+      case 'f-remove': removeFinding(fid); break;
+      case 'f-confirm': {
+        const f = state.findings.find((x) => x.id === fid);
+        if (!f) break;
+        f.level = 'match';
+        saveFinding(f);
+        syncAccount(f.account);
+        renderHeader();
+        renderFindings();
+        break;
+      }
+      case 'copy-summary': {
+        const text = reportText();
+        try {
+          await navigator.clipboard.writeText(text);
+          toast('Summary copied.');
+        } catch {
+          state.copyText = text;
+          renderFindings();
+          const out = $('#copy-out');
+          if (out) { out.focus(); out.select(); }
+        }
+        break;
+      }
+      case 'copy-close': state.copyText = ''; renderFindings(); break;
+      case 'download-report': offerFile(`sister-protects-report-${isoDay()}.txt`, reportText(), 'text/plain'); break;
+      case 'download-backup': offerFile(`sister-protects-backup-${isoDay()}.json`, backupJson(), 'application/json'); break;
+      case 'manual-save': {
+        const m = state.manual;
+        if (!m) break;
+        addManualFinding(m.file, $('#manual-acct').value, $('#manual-note').value.trim());
+        state.manual = null;
+        renderFindings();
+        toast('Saved to Findings.');
+        break;
+      }
+      case 'manual-cancel':
+        if (state.manual) URL.revokeObjectURL(state.manual.url);
+        state.manual = null;
+        $('#manual-box').dataset.id = '';
+        renderFindings();
+        break;
+      case 'clear-all': state.confirmClear = true; renderHer(); break;
+      case 'clear-no': state.confirmClear = false; renderHer(); break;
+      case 'clear-yes': clearEverything(); break;
+      default: break;
+    }
+  }
+
+  function onInput(e) {
+    const el = e.target;
+    if (el.id === 'import-src' && state.importer) state.importer.src = el.value;
+    else if (el.dataset.note !== undefined) {
+      const a = state.accounts.find((x) => x.u === el.dataset.note);
+      if (a) { a.note = el.value.slice(0, 500); saveAccountsSoon(); }
+    } else if (el.dataset.fnote !== undefined) {
+      const f = state.findings.find((x) => x.id === el.dataset.fnote);
+      if (!f) return;
+      f.note = el.value.slice(0, 1000);
+      clearTimeout(noteTimers.get(f.id));
+      noteTimers.set(f.id, setTimeout(() => { noteTimers.delete(f.id); saveFinding(f); }, 600));
+    }
+  }
+
+  function takeFiles(input) {
+    const files = Array.from(input.files || []);
+    input.value = '';
+    return files;
+  }
+
+  function wire() {
+    const tabs = $('.tabs');
+    tabs.addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) setTab(b.dataset.tab); });
+    tabs.addEventListener('keydown', (e) => {
+      const list = $$('.tabs [role="tab"]');
+      const i = list.indexOf(document.activeElement);
+      if (i < 0) return;
+      const j = { ArrowRight: (i + 1) % list.length, ArrowLeft: (i - 1 + list.length) % list.length, Home: 0, End: list.length - 1 }[e.key];
+      if (j === undefined) return;
+      e.preventDefault();
+      setTab(list[j].dataset.tab);
+      list[j].focus();
+    });
+    for (const id of ['t-handles', 't-names', 't-words']) {
+      $('#' + id).addEventListener('input', onTargetInput);
+      $('#' + id).addEventListener('blur', (e) => { delete e.target.dataset.dirty; renderHer(); });
+    }
+    $('#target-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveMainSoon.flush();
+      if (!state.target.handles.length) {
+        $('#target-saved').textContent = "Add her username first. It's the most reliable way to find her.";
+        $('#t-handles').focus();
+        return;
+      }
+      $('#target-saved').textContent = 'Saved.';
+      setTab('accounts');
+    });
+    $('#careful').addEventListener('change', (e) => { state.settings.careful = e.target.checked; saveMainSoon(); });
+    $('#follow-files').addEventListener('change', (e) => { const f = takeFiles(e.target); if (f.length) importFromScreens(f); });
+    $('#scan-files').addEventListener('change', (e) => { const f = takeFiles(e.target); if (f.length) startScan(f); });
+    $('#manual-file').addEventListener('change', (e) => {
+      const [f] = takeFiles(e.target);
+      if (!f) return;
+      if (state.manual) URL.revokeObjectURL(state.manual.url);
+      state.manual = { id: newId(), file: f, url: URL.createObjectURL(f) };
+      renderManual();
+      $('#manual-acct').focus();
+    });
+    $('#restore-file').addEventListener('change', (e) => { const [f] = takeFiles(e.target); if (f) restoreBackup(f); });
+    const drop = $('#drop');
+    for (const t of ['dragenter', 'dragover']) drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); });
+    for (const t of ['dragleave', 'drop']) drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); });
+    drop.addEventListener('drop', (e) => {
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []).filter((f) => !f.type || f.type.startsWith('image/'));
+      if (files.length) startScan(files);
+    });
+    $('#acct-q').addEventListener('input', (e) => { state.query = e.target.value; renderAccountList(); });
+    $('#add-one').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = $('#add-one-input');
+      const h = cleanHandle(input.value);
+      if (!h) { toast("That doesn't look like an Instagram username."); return; }
+      if (state.accounts.some((a) => a.u === h)) { toast(`@${h} is already on your list.`); return; }
+      addAccounts([{ u: h, name: '' }], 'following');
+      input.value = '';
+      if (state.filter !== 'all' && state.filter !== 'todo') state.filter = 'todo';
+      renderAccounts();
+      toast(`Added @${h}.`);
+    });
+    document.addEventListener('click', onAction);
+    document.addEventListener('input', onInput);
+    $('#toast-act').addEventListener('click', () => {
+      const undo = toastUndo;
+      toastUndo = null;
+      $('#toast').hidden = true;
+      if (undo) undo();
+    });
+    $('#viewer').addEventListener('click', (e) => { if (e.target.id === 'viewer') closeViewer(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#viewer').hidden) closeViewer(); });
+    window.addEventListener('pagehide', flushSaves);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSaves(); });
+  }
+
+  /* ================= boot ================= */
+  async function boot() {
+    wire();
+    let lastTab = null;
+    try { lastTab = sessionStorage.getItem('sp-tab'); } catch { /* not available */ }
+    setTab('her');
+    renderHeader();
+    readerReady = (async () => {
+      const ok = await ClaudeReader.init();
+      state.reader = ok ? ClaudeReader : OcrReader;
+      state.readerState = ok ? 'claude' : 'ocr';
+      if (window.claude) state.canDownload = Boolean(await window.claude.use('downloads').catch(() => null));
+    })().catch(() => { state.reader = OcrReader; state.readerState = 'ocr'; });
+    readerReady.then(() => renderAll());
+    try {
+      store = await withTimeout(pickStore(), 15000);
+    } catch {
+      store = new MemoryStore();
+    }
+    try {
+      applyLoaded(await withTimeout(store.load(), 20000));
+      state.storeState = store.kind;
+    } catch {
+      store = new MemoryStore();
+      state.storeState = 'failed';
+    }
+    loaded = true;
+    if (state.target.handles.length && lastTab && lastTab !== 'her') setTab(lastTab);
+    else renderAll();
+    document.documentElement.dataset.ready = '1';
+  }
+
+  window.SisterProtects = {
+    cleanHandle, parseHandles, parsePhrases, parsePastedList, parseFollowingLines, findMatches, sameHandle, handleInText,
+    normalizeScan, normalizeList, reportText, splitBySize,
+    get state() { return state; },
+  };
+  boot();
+})();
+</script>
+</body>
+</html>
