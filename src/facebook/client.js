@@ -3,7 +3,7 @@
 // why there were none.
 
 import path from 'node:path';
-import { extractFromHtml, extractFromJsonTexts, mergeListings, normalizeDomCard } from './extract.js';
+import { extractFromHtml, extractFromJsonTexts, mergeListings, normalizeDomCard, extractItemDetails } from './extract.js';
 import { fetchPage } from './http.js';
 import { BrowserEngine } from './browser.js';
 import { CookieJar, parseCookieInput, hasSession } from './cookies.js';
@@ -76,6 +76,25 @@ export class FacebookClient {
     });
     this.jar = new CookieJar(store.data.facebook.guestCookies || []);
     this.httpPausedUntil = 0;
+    this.gateChain = Promise.resolve();
+    this.lastRequestAt = 0;
+    this.gapMs = config.requestGapMs ?? 1500;
+  }
+
+  /** Every Facebook request goes through here: one at a time, with a short pause between them. */
+  gated(fn) {
+    const run = async () => {
+      const wait = this.lastRequestAt + this.gapMs - Date.now();
+      if (wait > 0) await sleep(jitter(wait, 0.3));
+      try {
+        return await fn();
+      } finally {
+        this.lastRequestAt = Date.now();
+      }
+    };
+    const p = this.gateChain.then(run, run);
+    this.gateChain = p.catch(() => {});
+    return p;
   }
 
   userCookies() {
@@ -84,7 +103,7 @@ export class FacebookClient {
 
   async viaHttp(url, hadLocation) {
     try {
-      const raw = await fetchPage(url, { userAgent: this.userAgent, jar: this.jar, extraCookies: this.userCookies() });
+      const raw = await this.gated(() => fetchPage(url, { userAgent: this.userAgent, jar: this.jar, extraCookies: this.userCookies() }));
       this.store.data.facebook.guestCookies = this.jar.toJSON();
       return classify(raw, { engine: 'fast', hadLocation, base: this.base });
     } catch (e) {
@@ -94,7 +113,7 @@ export class FacebookClient {
 
   async viaBrowser(url, hadLocation) {
     try {
-      const raw = await this.browser.search(url, { cookies: this.userCookies() });
+      const raw = await this.gated(() => this.browser.search(url, { cookies: this.userCookies() }));
       const fbState = this.store.data.facebook;
       if (raw.loggedIn && !fbState.connected) Object.assign(fbState, { connected: true, connectedAt: Date.now() });
       const res = classify(raw, { engine: 'browser', hadLocation, base: this.base });
@@ -133,6 +152,34 @@ export class FacebookClient {
     const res = await this.viaBrowser(url, hadLocation);
     if (first) res.fallbackFrom = first.code;
     return res;
+  }
+
+  /**
+   * Reads one listing's own page for its description and condition (search
+   * results don't include them). Uses the same mode as searches.
+   */
+  async fetchItem(id) {
+    const url = `${this.base}/marketplace/item/${encodeURIComponent(id)}/`;
+    const mode = this.store.settings.engine;
+    try {
+      const useBrowser =
+        mode === 'browser' || (mode === 'auto' && Date.now() < this.httpPausedUntil && (await this.browser.isAvailable()));
+      const raw = useBrowser
+        ? await this.gated(() => this.browser.search(url, { cookies: this.userCookies(), waitSelector: 'body', settleMs: 1500 }))
+        : await this.gated(() => fetchPage(url, { userAgent: this.userAgent, jar: this.jar, extraCookies: this.userCookies() }));
+      let pathname = '';
+      try {
+        pathname = new URL(raw.finalUrl).pathname;
+      } catch {
+        /* keep empty */
+      }
+      if (/^\/(login|checkpoint)/.test(pathname)) return { ok: false, code: 'LOGIN_REQUIRED', message: 'Facebook wanted a login to show the full listing.' };
+      const details = extractItemDetails(raw.html, id, raw.extraJson || []);
+      if (!details) return { ok: false, code: 'NO_DETAILS', message: 'Could not read the full listing.' };
+      return { ok: true, details, engine: useBrowser ? 'browser' : 'fast' };
+    } catch (e) {
+      return { ok: false, code: 'NETWORK', message: `Could not open the full listing (${e.message.split('\n')[0]}).` };
+    }
   }
 
   async status() {

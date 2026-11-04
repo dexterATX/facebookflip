@@ -8,7 +8,7 @@ import { MockFacebook } from './mock-facebook.js';
 import { createApp } from '../src/server.js';
 import { config } from '../src/config.js';
 
-const mock = new MockFacebook({ minAddSec: 20, maxAddSec: 60 });
+const mock = new MockFacebook({ minAddSec: 20, maxAddSec: 60, bargainEvery: 5 });
 let base;
 try {
   base = await mock.listen(Number(process.env.MOCK_PORT || 3999));
@@ -18,7 +18,7 @@ try {
 
 const app = await createApp({
   fbBase: base,
-  dataDir: path.join(config.root, 'data', 'demo'),
+  dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(config.root, 'data', 'demo'),
   demo: true,
   scanGapMs: 2000,
 });
@@ -26,9 +26,10 @@ const app = await createApp({
 const s = app.store.settings;
 s.engine = 'fast';
 if (!app.store.watches.length) {
-  app.store.addWatch({ name: 'Road & hybrid bikes', query: 'bike', location: 'tampa', minPrice: 50, maxPrice: 900, intervalSec: 60, exclude: ['kids', 'parts'] });
+  app.store.addWatch({ name: 'Road & hybrid bikes', query: 'bike', location: 'tampa', minPrice: 50, maxPrice: 900, intervalSec: 60, exclude: ['kids'] });
   app.store.addWatch({ name: 'Couches under $500', query: 'couch', location: 'tampa', maxPrice: 500, intervalSec: 120 });
-  app.store.addWatch({ name: 'PS5', query: 'ps5', location: 'tampa', minPrice: 150, intervalSec: 180, alertMode: 'all' });
+  // This one shows the most accurate setup: you tell FlipRadar what it resells for.
+  app.store.addWatch({ name: 'PS5', query: 'ps5', location: 'tampa', intervalSec: 180, resaleValue: 380 });
 }
 app.store.flush();
 

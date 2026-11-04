@@ -7,8 +7,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : '');
 const icon = (name, cls = '') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const sortKey = (l) => l.creationTime || l.firstSeenAt || 0;
-const DEALS = ['steal', 'great', 'good'];
-const isDeal = (l) => Boolean(l.deal && DEALS.includes(l.deal.label));
+const pileOf = (l) => l.pileOverride || l.pile || 'unsorted';
+const isDeal = (l) => pileOf(l) === 'deals';
 const PAGE = 120;
 const SECRET = '••••••••';
 const narrow = window.matchMedia('(max-width: 600px)');
@@ -71,7 +71,9 @@ const state = {
   demo: false,
   junkWords: [],
   intervals: [60, 120, 180, 300, 600, 900, 1800, 3600],
-  view: { tab: 'all', watchId: null, q: '' },
+  view: { tab: 'deals', watchId: null, q: '' },
+  accuracy: null,
+  ai: null,
   limit: PAGE,
   fresh: new Map(), // id -> arrival time (for the "NEW" glow)
   pendingScan: new Map(), // watch id -> when 'Check now' was pressed
@@ -139,7 +141,8 @@ function visibleListings() {
   for (const l of state.listings.values()) {
     if (l.hidden) continue;
     if (tab === 'saved' && !l.saved) continue;
-    if (tab === 'deals' && !isDeal(l) && l.prevPrice == null) continue;
+    if (tab === 'deals' && !isDeal(l)) continue;
+    if (tab === 'unsorted' && isDeal(l)) continue;
     if (watchId && !l.watchIds?.includes(watchId)) continue;
     if (terms.length) {
       const t = `${l.title} ${l.locationText || ''}`.toLowerCase();
@@ -151,17 +154,16 @@ function visibleListings() {
 }
 
 function counts() {
-  let all = 0;
-  let deals = 0;
-  let saved = 0;
+  const c = { all: 0, deals: 0, unsorted: 0, saved: 0 };
   for (const l of state.listings.values()) {
     if (l.hidden) continue;
     if (state.view.watchId && !l.watchIds?.includes(state.view.watchId)) continue;
-    all++;
-    if (isDeal(l) || l.prevPrice != null) deals++;
-    if (l.saved) saved++;
+    c.all++;
+    if (isDeal(l)) c.deals++;
+    else c.unsorted++;
+    if (l.saved) c.saved++;
   }
-  return { all, deals, saved };
+  return c;
 }
 
 const notifyOn = () => {
@@ -322,7 +324,25 @@ const cardEls = new Map(); // id -> { el, sig }
 
 function cardSig(l) {
   const names = (l.watchIds || []).map((id) => watchById(id)?.name || '').join('|');
-  return [l.title, l.priceText, l.price, l.prevPrice, l.wasPriceText, l.photo, l.saved, l.deal?.label, l.deal?.pct, l.locationText, names, l.creationTime, state.fresh.has(l.id)].join('¦');
+  const e = l.eval || {};
+  return [l.title, l.priceText, l.price, l.prevPrice, l.wasPriceText, l.photo, l.saved, pileOf(l), l.feedback, e.headline, e.profit, e.confidence, e.resale?.value, l.locationText, names, l.creationTime, state.fresh.has(l.id), Boolean(l.details), Boolean(l.ai)].join('¦');
+}
+
+/** One line under the title: why it's a deal, or why it isn't. */
+function verdictLine(l) {
+  const e = l.eval;
+  if (!e) return '';
+  let cls = 'skip';
+  let text = e.headline || '';
+  if (isDeal(l)) {
+    cls = 'deal';
+    text = e.resale ? `Resells ~${money(e.resale.value)} · ${Math.round((e.margin || 0) * 100)}% margin` : 'You marked this a deal';
+  } else if (e.flags?.some((f) => f.kind === 'block') || l.filtered) {
+    cls = 'flag';
+  }
+  const conf = e.confidence ? `<span class="conf ${e.confidence}" title="${esc(e.confidence)} confidence"></span>` : '';
+  const extra = [l.details ? 'read full listing' : '', l.ai ? 'AI checked' : ''].filter(Boolean).join(', ');
+  return `<button class="verdict ${cls}" data-act="why" title="Why? ${esc(extra)}">${conf}<span class="vt">${esc(text)}</span>${icon('info')}</button>`;
 }
 
 function ageBadge(l, now = Date.now()) {
@@ -338,7 +358,11 @@ function cardHtml(l) {
   const photo = safeUrl(l.photo);
   const url = safeUrl(l.url);
   const badges = [];
-  if (isDeal(l)) badges.push(`<span class="badge ${l.deal.label}" title="Typical price for this watch: ${esc(money(l.deal.median))} (from ${l.deal.n} listings)">${l.deal.label === 'steal' ? '🔥 ' : ''}${l.deal.pct}% under</span>`);
+  const e = l.eval;
+  if (isDeal(l) && typeof e?.profit === 'number') {
+    const hot = e.profit >= 100 || e.margin >= 0.5;
+    badges.push(`<span class="badge ${hot ? 'steal' : 'great'}" title="Estimated profit after fees and costs">${hot ? '🔥 ' : ''}+${esc(money(e.profit))}</span>`);
+  }
   if (l.prevPrice != null) badges.push(`<span class="badge drop">${icon('down')}Price drop</span>`);
   const was = l.prevPrice != null ? (l.prevPriceText || money(l.prevPrice)) : l.wasPriceText;
   const w = watchById((l.watchIds || [])[0]);
@@ -353,11 +377,13 @@ function cardHtml(l) {
       <div class="price-row"><span class="price">${esc(priceLabel(l))}</span>${was ? `<s class="was">${esc(was)}</s>` : ''}</div>
       <h3 class="title"><a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-act="open" title="${esc(l.title)}">${esc(l.title)}</a></h3>
       <div class="meta">${l.locationText ? `${icon('pin')}<span>${esc(l.locationText)}</span>` : ''}</div>
+      ${verdictLine(l)}
       <div class="foot">
         ${w ? `<span class="chip" title="Found by watch: ${esc(w.name)}">${esc(w.name)}</span>` : ''}
         <div class="acts">
+          <button class="icon-btn sm vote ${l.feedback === 'good' ? 'on-good' : ''}" data-act="good" title="Good deal: keep in Deals" aria-label="Good deal" aria-pressed="${l.feedback === 'good'}">${icon('up')}</button>
+          <button class="icon-btn sm vote ${l.feedback === 'bad' ? 'on-bad' : ''}" data-act="bad" title="Not a deal: move to Unsorted" aria-label="Not a deal" aria-pressed="${l.feedback === 'bad'}">${icon('downvote')}</button>
           <button class="icon-btn sm ${l.saved ? 'on' : ''}" data-act="save" title="${l.saved ? 'Unsave' : 'Save'}" aria-label="${l.saved ? 'Unsave' : 'Save'}" aria-pressed="${Boolean(l.saved)}">${icon('star')}</button>
-          <button class="icon-btn sm" data-act="hide" title="Hide" aria-label="Hide">${icon('eye-off')}</button>
           <a class="icon-btn sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-act="open" title="Open on Facebook" aria-label="Open on Facebook">${icon('external')}</a>
         </div>
       </div>
@@ -366,17 +392,22 @@ function cardHtml(l) {
 
 function renderTabs() {
   const c = counts();
-  $('#count-all').textContent = c.all || '';
-  $('#count-deals').textContent = c.deals || '';
-  $('#count-saved').textContent = c.saved || '';
+  for (const k of ['all', 'deals', 'unsorted', 'saved']) $(`#count-${k}`).textContent = c[k] || '';
   for (const b of $$('.tab')) b.classList.toggle('active', b.dataset.tab === state.view.tab);
   for (const b of $$('.tab')) b.setAttribute('aria-selected', String(b.dataset.tab === state.view.tab));
   const note = $('#filter-note');
+  const parts = [];
   const w = state.view.watchId && watchById(state.view.watchId);
-  if (w) {
-    note.innerHTML = `Showing <b>${esc(w.name)}</b> only <button class="btn btn-xs btn-ghost" data-act="clear-filter">${icon('x')}Show all</button>`;
-    note.hidden = false;
-  } else note.hidden = true;
+  if (w) parts.push(`<span>Showing <b>${esc(w.name)}</b> only</span><button class="btn btn-xs btn-ghost" data-act="clear-filter">${icon('x')}Show all</button>`);
+  const a = state.accuracy;
+  if (a && a.dealsRight + a.dealsWrong + a.missed + a.rightSkips > 0) {
+    const calls = a.dealsRight + a.dealsWrong;
+    parts.push(
+      `<span class="acc" title="From your thumbs up / down">${icon('check')}Your feedback: ${calls ? `<b>${a.dealsRight} of ${calls}</b> deals were right` : 'no deals rated yet'}${a.missed ? ` · <b>${a.missed}</b> good one${a.missed === 1 ? ' was' : 's were'} in Unsorted` : ''}</span>`,
+    );
+  }
+  note.innerHTML = parts.join('');
+  note.hidden = !parts.length;
 }
 
 function renderGrid() {
@@ -449,9 +480,12 @@ function renderEmpty(n) {
   } else if (tab === 'saved') {
     title = 'Nothing saved yet';
     sub = 'Tap the star on a listing to keep it here.';
-  } else if (tab === 'deals') {
-    title = 'No deals spotted yet';
-    sub = 'A deal is a listing priced well under what is typical for that watch, or one whose price dropped. FlipRadar needs a few listings to learn prices first.';
+  } else if (tab === 'deals' && counts().unsorted) {
+    title = 'No deals yet';
+    sub = `Nothing so far clears your rules (at least ${money(state.settings?.deals?.minProfit ?? 40)} profit and ${state.settings?.deals?.minMarginPct ?? 25}% margin). Everything else is in Unsorted with the reason. Prices get more reliable as FlipRadar sees more listings; to get confident calls sooner, add a "resells for" price to your watch or turn on the AI check in Settings.`;
+  } else if (tab === 'unsorted' && counts().deals) {
+    title = 'Unsorted is empty';
+    sub = 'Everything found so far is in Deals.';
   } else if (state.watches.some((w) => w.enabled && !w.lastStatus)) {
     title = 'Checking Facebook…';
     sub = 'The first results usually show up within a few seconds.';
@@ -536,7 +570,8 @@ function chime(hot) {
 function desktopNotify(l) {
   if (!state.prefs.desktop || !('Notification' in window) || Notification.permission !== 'granted') return;
   try {
-    const body = [l.locationText, isDeal(l) ? `${l.deal.pct}% under typical` : '', l.prevPrice != null ? `was ${l.prevPriceText || money(l.prevPrice)}` : ''].filter(Boolean).join(' · ');
+    const e = l.eval;
+    const body = [isDeal(l) && typeof e?.profit === 'number' ? `+${money(e.profit)} profit, resells ~${money(e.resale.value)}` : '', l.locationText, l.prevPrice != null ? `was ${l.prevPriceText || money(l.prevPrice)}` : ''].filter(Boolean).join(' · ');
     const n = new Notification(`${priceLabel(l)} · ${l.title}`, { body, icon: safeUrl(l.photo) || '/icon-192.png', tag: l.id });
     n.onclick = () => {
       window.focus();
@@ -554,7 +589,7 @@ function updateTitle() {
 
 function announce(alerted) {
   if (!alerted.length) return;
-  chime(alerted.some((l) => isDeal(l) && ['steal', 'great'].includes(l.deal.label)));
+  chime(alerted.some((l) => isDeal(l) && (l.eval?.profit >= 100 || l.eval?.margin >= 0.5)));
   alerted.slice(0, 3).forEach(desktopNotify);
   if (document.hidden) {
     state.unread += alerted.length;
@@ -588,28 +623,21 @@ function connectEvents() {
       }
     });
 
+  // New listings and changes. (Sounds and pop-ups come only from the 'alert' event.)
   on('listings', (items) => {
-    const alerted = [];
     const now = Date.now();
     for (const l of items) {
       state.listings.set(l.id, l);
       if (!l.baseline) state.fresh.set(l.id, now);
-      if (l.alertedAt) alerted.push(l);
     }
     renderGrid();
     renderWatches();
-    announce(alerted);
   });
   on('updates', (items) => {
-    const alerted = [];
-    for (const l of items) {
-      const before = state.listings.get(l.id);
-      state.listings.set(l.id, l);
-      if (l.prevPrice != null && l.alertedAt && (!before || before.price !== l.price)) alerted.push(l);
-    }
+    for (const l of items) state.listings.set(l.id, l);
     renderGrid();
     renderWatches();
-    announce(alerted);
+    if (state.modal === 'why' && items.some((l) => l.id === state.whyId)) openWhy(state.listings.get(state.whyId));
   });
   on('watch', (w) => {
     const i = state.watches.findIndex((x) => x.id === w.id);
@@ -653,11 +681,30 @@ function connectEvents() {
     if (state.modal === 'settings') renderChannelStates();
   });
   on('toast', (t) => toast(t.text, t.kind || 'ok', { ms: 6000 }));
+  // A deal confirmed after its closer look (full listing / AI) alerts here.
+  on('alert', (items) => {
+    for (const l of items) state.listings.set(l.id, l);
+    renderGrid();
+    renderWatches();
+    announce(items);
+  });
+  // Rules or a watch changed on the server: everything was re-sorted.
+  on('reload', () => loadState().catch(() => {}));
+  on('accuracy', (a) => {
+    state.accuracy = a;
+    renderTabs();
+  });
+  on('ai', (info) => {
+    state.ai = info;
+    if (state.modal === 'settings') renderAiBox();
+  });
 }
 
 async function loadState() {
   const s = await api('/api/state');
   state.settings = s.settings;
+  state.accuracy = s.accuracy || null;
+  state.ai = s.ai || null;
   state.watches = s.watches;
   state.status = s.status;
   state.facebook = s.facebook;
@@ -700,9 +747,105 @@ modal.addEventListener('click', (e) => {
 
 const head = (title, sub = '') => `<div class="m-head"><div><h2>${esc(title)}</h2>${sub ? `<p class="hint">${sub}</p>` : ''}</div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>`;
 
+// ---------------------------------------------------------------- deal check: feedback + "why?"
+async function vote(l, kind) {
+  const next = l.feedback === kind ? null : kind; // pressing again undoes it
+  const before = { feedback: l.feedback, pileOverride: l.pileOverride };
+  l.feedback = next;
+  l.pileOverride = next === 'good' ? 'deals' : next === 'bad' ? 'unsorted' : null;
+  renderGrid();
+  renderWatches();
+  if (state.modal === 'why') openWhy(l);
+  try {
+    await api(`/api/listings/${l.id}`, { method: 'POST', body: { feedback: next } });
+    if (next === 'good') toast('Marked as a good deal. It stays in Deals.');
+    else if (next === 'bad') toast('Marked as not a deal. Moved to Unsorted.');
+  } catch (ex) {
+    Object.assign(l, before);
+    renderGrid();
+    toast(ex.message, 'error');
+  }
+}
+
+const REASON_ICON = { block: ['x', 'r-block'], warn: ['alert', 'r-warn'], good: ['check', 'r-good'], info: ['info', 'r-info'] };
+
+function openWhy(l) {
+  if (!l) return;
+  state.whyId = l.id;
+  const e = l.eval || {};
+  const deal = isDeal(l);
+  const photo = safeUrl(l.photo);
+  const url = safeUrl(l.url);
+  const math = [];
+  if (e.resale) {
+    const range = e.resale.low !== e.resale.high ? ` <small>(${money(e.resale.low)}–${money(e.resale.high)})</small>` : '';
+    math.push(`<tr><td>Resells for about</td><td>${money(e.resale.value)}${range}</td></tr>`);
+    if (typeof e.profit === 'number') {
+      math.push(`<tr><td>Asking price</td><td>− ${esc(priceLabel(l))}</td></tr>`);
+      if (e.fees) math.push(`<tr><td>eBay fees & shipping</td><td>− ${money(e.fees)}</td></tr>`);
+      if (e.otherCosts) math.push(`<tr><td>Your other costs</td><td>− ${money(e.otherCosts)}</td></tr>`);
+      math.push(`<tr class="total ${e.profit >= 0 ? 'pos' : 'neg'}"><td>Estimated profit</td><td>${e.profit >= 0 ? '+' : '−'}${money(Math.abs(e.profit))} <small>(${Math.round((e.margin || 0) * 100)}% margin)</small></td></tr>`);
+    }
+  }
+  const reasons = (e.reasons || [])
+    .map((r) => {
+      const [ic, cls] = REASON_ICON[r.kind] || REASON_ICON.info;
+      return `<li class="${cls}">${icon(ic)}<span>${esc(r.text)}</span></li>`;
+    })
+    .join('');
+  const aiBlock = l.ai
+    ? `<div class="ai-box">${icon('spark')}<div><b>AI second opinion</b> <small>(${esc(l.ai.model || '')})</small><br>${esc(l.ai.item || '')} · condition: ${esc(l.ai.condition || 'unknown')} · resells ${money(l.ai.low)}–${money(l.ai.high)} · ${esc(l.ai.confidence)} confidence<br><i>${esc(l.ai.reason || '')}</i></div></div>`
+    : l.aiError
+      ? `<p class="hint">AI check didn't run: ${esc(l.aiError)}</p>`
+      : '';
+  const desc = l.details?.description
+    ? `<div class="desc"><b>Seller wrote${l.details.condition ? ` (condition: ${esc(l.details.condition)})` : ''}:</b><p>${esc(l.details.description)}</p></div>`
+    : l.detailsError
+      ? `<p class="hint">Couldn't read the full listing: ${esc(l.detailsError)}</p>`
+      : `<p class="hint">The full listing wasn't opened (only possible deals get a closer look).</p>`;
+  openModal(
+    'why',
+    `${head('Deal check')}
+    <div class="m-body">
+      <div class="why-top">
+        ${photo ? `<img src="${esc(photo)}" alt="" referrerpolicy="no-referrer">` : ''}
+        <div><div class="price">${esc(priceLabel(l))}</div><div class="why-title">${esc(l.title)}</div>
+          <span class="pile-tag ${deal ? 'deal' : ''}">${deal ? 'In Deals' : 'In Unsorted'}${l.pileOverride ? ' (your call)' : ''}</span>
+          ${e.confidence ? `<span class="conf-tag ${esc(e.confidence)}">${esc(e.confidence)} confidence</span>` : ''}</div>
+      </div>
+      ${math.length ? `<table class="why-math">${math.join('')}</table>` : ''}
+      <ul class="reasons">${reasons}</ul>
+      ${aiBlock}
+      ${desc}
+      <p class="hint">Estimates come from asking prices of similar listings, adjusted down to what things usually sell for. They're a guide, not a promise: check the listing before you buy.</p>
+    </div>
+    <div class="m-foot">
+      <button class="btn btn-sm ${l.feedback === 'good' ? 'btn-primary' : ''}" data-why="good">${icon('up')}Good deal</button>
+      <button class="btn btn-sm ${l.feedback === 'bad' ? 'btn-danger' : ''}" data-why="bad">${icon('downvote')}Not a deal</button>
+      <span class="spacer"></span>
+      <button class="btn btn-sm btn-ghost" data-why="hide">${icon('eye-off')}Hide</button>
+      <a class="btn btn-sm btn-primary" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon('external')}Open</a>
+    </div>`,
+  );
+  modal.querySelectorAll('[data-why]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const act = b.dataset.why;
+      if (act === 'hide') {
+        l.hidden = true;
+        closeModal();
+        renderGrid();
+        renderWatches();
+        await api(`/api/listings/${l.id}`, { method: 'POST', body: { hidden: true } }).catch((ex) => toast(ex.message, 'error'));
+        return;
+      }
+      vote(l, act);
+    }),
+  );
+}
+
 // ---------------------------------------------------------------- watch form
 function openWatchForm(w = null) {
-  const v = w || { name: '', query: '', location: '', minPrice: null, maxPrice: null, include: [], exclude: [], intervalSec: 180, alertMode: 'all', alertDrops: true, extraParams: {}, category: '' };
+  const v = w || { name: '', query: '', location: '', minPrice: null, maxPrice: null, include: [], exclude: [], intervalSec: 180, alertMode: 'deals', alertDrops: true, extraParams: {}, category: '', resaleValue: null, sellOn: 'local', shipCost: null };
   const intervals = state.intervals
     .map((s) => `<option value="${s}" ${Number(v.intervalSec) === s ? 'selected' : ''}>${intervalLabel(s)}${s === 180 ? ' (recommended)' : s < 180 ? ' (faster, busier)' : ''}</option>`)
     .join('');
@@ -731,10 +874,18 @@ function openWatchForm(w = null) {
         <label class="field"><span>Check every</span><select class="input" id="f-interval">${intervals}</select></label>
         <label class="field"><span>Name <small>(optional)</small></span><input class="input" id="f-name" value="${esc(v.name)}" placeholder="Auto from search" maxlength="60"></label>
       </div>
+      <div class="field"><span>How you'll resell it <small>(for the profit math)</small></span>
+        <div class="row3">
+          <label class="field"><span>Resells for about <small>(optional)</small></span><div class="money-wrap"><input class="input money" id="f-resale" inputmode="decimal" value="${v.resaleValue ?? ''}" placeholder="learn it"></div></label>
+          <label class="field"><span>Sell on</span><select class="input" id="f-sellon"><option value="local" ${v.sellOn !== 'ebay' ? 'selected' : ''}>Locally, no fees</option><option value="ebay" ${v.sellOn === 'ebay' ? 'selected' : ''}>eBay, ~13.6% fees</option></select></label>
+          <label class="field" id="f-ship-wrap" ${v.sellOn === 'ebay' ? '' : 'hidden'}><span>Shipping you pay</span><div class="money-wrap"><input class="input money" id="f-ship" inputmode="decimal" value="${v.shipCost ?? ''}" placeholder="0"></div></label>
+        </div>
+        <small class="hint">Know what these usually sell for? Enter it for the most accurate calls. Otherwise FlipRadar learns it from similar listings.</small>
+      </div>
       <div class="field"><span>Alert me about</span>
         <div class="choice-row">
-          <label class="choice"><input type="radio" name="f-mode" value="all" ${v.alertMode !== 'deals' ? 'checked' : ''}><b>Every new listing</b><small>Fastest way to be first.</small></label>
-          <label class="choice"><input type="radio" name="f-mode" value="deals" ${v.alertMode === 'deals' ? 'checked' : ''}><b>Only deals</b><small>Priced well under typical for this search.</small></label>
+          <label class="choice"><input type="radio" name="f-mode" value="deals" ${v.alertMode !== 'all' ? 'checked' : ''}><b>Only good deals</b><small>Recommended. Everything else goes to Unsorted.</small></label>
+          <label class="choice"><input type="radio" name="f-mode" value="all" ${v.alertMode === 'all' ? 'checked' : ''}><b>Every new listing</b><small>Noisier, but you see everything first.</small></label>
         </div>
       </div>
       <label class="check-line"><span class="switch"><input type="checkbox" id="f-drops" ${v.alertDrops !== false ? 'checked' : ''}><span></span></span>Also alert me when a seller drops the price</label>
@@ -771,6 +922,9 @@ function openWatchForm(w = null) {
   }, 250);
   $('#f-link').addEventListener('input', tryLink);
 
+  $('#f-sellon').addEventListener('change', (ev) => {
+    $('#f-ship-wrap').hidden = ev.target.value !== 'ebay';
+  });
   modal.querySelector('[data-act="junk"]').addEventListener('click', () => {
     const cur = $('#f-exclude').value.split(',').map((s) => s.trim()).filter(Boolean);
     for (const j of state.junkWords) if (!cur.includes(j)) cur.push(j);
@@ -790,8 +944,11 @@ function openWatchForm(w = null) {
       include: $('#f-include').value,
       exclude: $('#f-exclude').value,
       intervalSec: Number($('#f-interval').value),
-      alertMode: modal.querySelector('input[name="f-mode"]:checked')?.value || 'all',
+      alertMode: modal.querySelector('input[name="f-mode"]:checked')?.value || 'deals',
       alertDrops: $('#f-drops').checked,
+      resaleValue: $('#f-resale').value,
+      sellOn: $('#f-sellon').value,
+      shipCost: $('#f-ship').value,
       extraParams: parsed.extraParams,
       category: $('#f-query').value.trim() ? '' : parsed.category,
     };
@@ -845,6 +1002,7 @@ async function saveSetting(pathStr, value) {
     }
     renderSideFoot();
     renderChannelStates();
+    if (pathStr.startsWith('ai.')) renderAiBox();
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -907,6 +1065,23 @@ function openSettings() {
         <div class="toggle-line"><div class="txt"><b>Desktop notifications</b><small>Pop-ups on this computer while this page is open.</small></div><span class="switch"><input type="checkbox" data-pref="desktop" ${state.prefs.desktop ? 'checked' : ''}><span></span></span></div>
       </section>
 
+      <section class="section">
+        <h3>${icon('check')}Deal rules</h3>
+        <p class="hint">A listing goes to <b>Deals</b> (and alerts you) only when the estimated profit clears both bars. Everything else goes to <b>Unsorted</b> with the reason. Changing these re-sorts what's already found.</p>
+        <div class="row2">
+          <label class="field"><span>Minimum profit</span><div class="money-wrap"><input class="input money" data-k="deals.minProfit" data-num inputmode="decimal" value="${s.deals.minProfit}"></div></label>
+          <label class="field"><span>Minimum margin <small>(% of resale price)</small></span><input class="input" data-k="deals.minMarginPct" data-num inputmode="decimal" value="${s.deals.minMarginPct}"></label>
+        </div>
+        <div class="row2">
+          <label class="field"><span>Other costs per flip <small>(gas, cleaning, time)</small></span><div class="money-wrap"><input class="input money" data-k="deals.otherCosts" data-num inputmode="decimal" value="${s.deals.otherCosts}"></div></label>
+          <label class="field"><span>Items sell for <small>(% of asking)</small></span><input class="input" data-k="deals.askToSalePct" data-num inputmode="decimal" value="${s.deals.askToSalePct}"></label>
+        </div>
+        <small class="hint">Marketplace prices are asking prices; buyers usually haggle them down. 90% is a cautious default.</small>
+        <div class="toggle-line"><div class="txt"><b>Read the full listing for possible deals</b><small>Checks the description and condition for problems ("doesn't turn on", "Zelle only") before alerting. One extra page load per possible deal.</small></div>${sw('deals.readDetails', s.deals.readDetails)}</div>
+      </section>
+
+      <section class="section" id="ai-box"></section>
+
       <section class="section" id="fb-box"></section>
 
       <section class="section">
@@ -926,7 +1101,36 @@ function openSettings() {
   );
 
   renderFacebookBox();
+  renderAiBox();
   renderChannelStates();
+}
+
+const AI_COST_HINT = { 'claude-opus-5-5': '~3¢/check', 'claude-sonnet-5-5': '~1–2¢/check', 'claude-haiku-5-5': '~0.1¢/check' };
+
+function renderAiBox() {
+  const box = $('#ai-box');
+  if (!box || !state.settings) return;
+  const a = state.settings.ai;
+  const info = state.ai || {};
+  const models = info.models || {};
+  const usage = info.usage || { checks: 0, costUsd: 0 };
+  const keyed = Boolean(a.apiKey) || a.envKey;
+  const err = info.lastError && Date.now() - info.lastError.at < 6 * 3600e3 ? info.lastError : null;
+  box.innerHTML = `
+    <h3>${icon('spark')}AI second opinion <span class="state ${a.enabled && keyed ? 'ok' : 'off'}">${a.enabled && keyed ? 'On' : 'Off'}</span></h3>
+    <p class="hint">Optional. For possible deals only, Claude identifies the exact item, reads the condition and photo, and estimates what it really sells for. FlipRadar cross-checks that against similar listings and never trusts it alone. Needs an Anthropic API key (<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">get one here</a>); you pay Anthropic per check.</p>
+    <div class="toggle-line"><div class="txt"><b>Use the AI second opinion</b><small>${keyed ? 'Key saved.' : 'Add your API key below first.'}</small></div><span class="switch"><input type="checkbox" data-k="ai.enabled" ${a.enabled ? 'checked' : ''}><span></span></span></div>
+    <div class="row2">
+      <label class="field"><span>Anthropic API key</span><input class="input" type="password" data-k="ai.apiKey" value="${esc(a.apiKey)}" placeholder="${a.envKey ? 'Using ANTHROPIC_API_KEY' : 'sk-ant-…'}" autocomplete="off"></label>
+      <label class="field"><span>Model</span><select class="input" data-k="ai.model">${Object.entries(models)
+        .map(([id, label]) => `<option value="${esc(id)}" ${a.model === id ? 'selected' : ''}>${esc(label)} (${AI_COST_HINT[id] || ''})</option>`)
+        .join('')}</select></label>
+    </div>
+    <div class="row2">
+      <label class="field"><span>Most checks per day</span><input class="input" data-k="ai.maxPerDay" data-num inputmode="numeric" value="${a.maxPerDay}"></label>
+      <div class="field"><span>Today</span><div class="status-line">${icon('activity')}<span>${usage.checks} check${usage.checks === 1 ? '' : 's'} · about $${(usage.costUsd || 0).toFixed(2)}</span></div></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-sm" data-act="ai-test" ${a.enabled && keyed ? '' : 'disabled'}>${icon('spark')}Test the AI</button>${err ? `<span class="state err">Last problem: ${esc(err.message)}</span>` : ''}</div>`;
 }
 
 function renderChannelStates() {
@@ -1064,6 +1268,17 @@ async function onSettingsClick(e) {
       break;
     case 'connect':
       connectFacebook();
+      break;
+    case 'ai-test':
+      btn.classList.add('loading');
+      try {
+        const r = await api('/api/ai/test', { method: 'POST' });
+        toast(`AI works (${r.model}): it read a sample PS5 listing as "${r.item}", resells ${money(r.low)}–${money(r.high)}.`, 'ok', { ms: 9000 });
+      } catch (ex) {
+        toast(ex.message, 'error', { ms: 9000 });
+      } finally {
+        btn.classList.remove('loading');
+      }
       break;
     case 'disconnect':
       if (!confirm('Disconnect Facebook? This deletes the saved login from FlipRadar (not from Facebook).')) return;
@@ -1203,6 +1418,11 @@ function bindEvents() {
           }, 300);
         }
         return; // let the link open
+      }
+      if (act === 'why') return openWhy(l);
+      if (act === 'good' || act === 'bad') {
+        e.preventDefault();
+        return vote(l, act);
       }
       if (act === 'save' || act === 'hide') {
         e.preventDefault();

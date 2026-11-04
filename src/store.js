@@ -5,6 +5,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomId, clamp, toNumber, log } from './util.js';
+import { DEFAULT_DEAL_RULES } from './evaluate.js';
+import { DEFAULT_AI_MODEL } from './ai.js';
 
 export const DEFAULT_SETTINGS = {
   engine: 'auto', // 'auto' | 'fast' | 'browser'
@@ -12,6 +14,8 @@ export const DEFAULT_SETTINGS = {
   maxAlertAgeMin: 60, // only alert on listings posted within this many minutes
   hidePlaceholderPrices: true, // hide "$1" bait listings
   quietHours: { enabled: false, start: 1, end: 6 },
+  deals: { ...DEFAULT_DEAL_RULES },
+  ai: { enabled: false, apiKey: '', model: DEFAULT_AI_MODEL, maxPerDay: 60 },
   notify: {
     ntfy: { enabled: false, server: 'https://ntfy.sh', topic: '', token: '' },
     discord: { enabled: false, webhookUrl: '' },
@@ -22,6 +26,10 @@ export const DEFAULT_SETTINGS = {
 export const INTERVALS = [60, 120, 180, 300, 600, 900, 1800, 3600];
 const KEEP_MS = 7 * 86400e3;
 const MAX_LISTINGS = 3000;
+// Price memory for comparisons outlives the listings themselves.
+const COMPS_KEEP_MS = 45 * 86400e3;
+const COMPS_WINDOW_MS = 30 * 86400e3;
+const MAX_COMPS = 12000;
 const SEARCH_FIELDS = ['query', 'location', 'category', 'minPrice', 'maxPrice', 'radius', 'extraParams', 'include', 'exclude'];
 
 export const sortKey = (l) => l.creationTime || l.firstSeenAt || 0;
@@ -88,7 +96,10 @@ export function cleanWatchInput(body, existing = null) {
   if (has('include')) out.include = terms(b.include);
   if (has('exclude')) out.exclude = terms(b.exclude);
   if (has('intervalSec')) out.intervalSec = clamp(Math.round(toNumber(b.intervalSec) || 180), 60, 3600);
-  if (has('alertMode')) out.alertMode = b.alertMode === 'deals' ? 'deals' : 'all';
+  if (has('alertMode')) out.alertMode = b.alertMode === 'all' ? 'all' : 'deals';
+  if (has('resaleValue')) out.resaleValue = price(b.resaleValue) || null;
+  if (has('sellOn')) out.sellOn = b.sellOn === 'ebay' ? 'ebay' : 'local';
+  if (has('shipCost')) out.shipCost = price(b.shipCost);
   if (has('alertDrops')) out.alertDrops = Boolean(b.alertDrops);
   if (has('enabled')) out.enabled = Boolean(b.enabled);
   if (has('mute')) out.mute = Boolean(b.mute);
@@ -135,6 +146,8 @@ export class Store {
       settings,
       watches: Array.isArray(d.watches) ? d.watches : [],
       listings: d.listings && typeof d.listings === 'object' ? d.listings : {},
+      comps: Array.isArray(d.comps) ? d.comps : [],
+      aiUsage: d.aiUsage && typeof d.aiUsage === 'object' ? d.aiUsage : null,
       facebook: d.facebook && typeof d.facebook === 'object' ? d.facebook : { connected: false },
     };
   }
@@ -186,8 +199,11 @@ export class Store {
       include: [],
       exclude: [],
       intervalSec: 180,
-      alertMode: 'all',
+      alertMode: 'deals',
       alertDrops: true,
+      resaleValue: null,
+      sellOn: 'local',
+      shipCost: null,
       enabled: true,
       mute: false,
       createdAt: now,
@@ -247,20 +263,25 @@ export class Store {
     return page;
   }
 
-  /** Listings this watch has seen in the last two weeks, for the "typical price" comparison. */
-  pricePool(watchId, now = Date.now()) {
-    const out = [];
-    for (const l of Object.values(this.data.listings)) {
-      if (l.price > 1 && l.watchIds?.includes(watchId) && now - (l.firstSeenAt || 0) < 14 * 86400e3) {
-        out.push({ id: l.id, title: l.title, price: l.price });
-      }
-    }
-    return out;
+  /** Remember a listing's asking price for future comparisons. `junk` ones (broken, replicas...) are kept out. */
+  addComp(l, { junk = false, now = Date.now() } = {}) {
+    if (!(l.price > 1)) return;
+    const i = this.data.comps.findIndex((c) => c.id === l.id);
+    const entry = { id: l.id, title: l.title, price: l.price, at: now, junk };
+    if (i === -1) this.data.comps.push(entry);
+    else this.data.comps[i] = { ...this.data.comps[i], price: l.price, junk };
+  }
+
+  /** Prices seen in the last 30 days, for the "what does it resell for" estimate. */
+  compsPool(now = Date.now()) {
+    return this.data.comps.filter((c) => !c.junk && now - c.at < COMPS_WINDOW_MS);
   }
 
   prune(now = Date.now()) {
+    const before = this.data.comps.length;
+    this.data.comps = this.data.comps.filter((c) => now - c.at < COMPS_KEEP_MS).slice(-MAX_COMPS);
     const entries = Object.values(this.data.listings);
-    let removed = 0;
+    let removed = before - this.data.comps.length;
     for (const l of entries) {
       if (!l.saved && now - (l.lastSeenAt || l.firstSeenAt || 0) > KEEP_MS) {
         delete this.data.listings[l.id];

@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { config as defaultConfig } from './config.js';
 import { Store, cleanWatchInput, INTERVALS } from './store.js';
 import { Monitor } from './monitor.js';
+import { AiAdvisor, AI_MODELS } from './ai.js';
 import { Notifier } from './notify.js';
 import { FacebookClient } from './facebook/client.js';
 import { buildSearchUrl, parseMarketplaceUrl } from './facebook/urls.js';
@@ -60,6 +61,7 @@ function maskSettings(s) {
       const list = parseCookieInput(s.cookies);
       return list.length ? (hasSession(list) ? 'session' : 'partial') : 'none';
     })(),
+    ai: { ...s.ai, apiKey: s.ai.apiKey ? SECRET : '', envKey: Boolean(process.env.ANTHROPIC_API_KEY) },
     notify: {
       ntfy: { ...n.ntfy, token: n.ntfy.token ? SECRET : '' },
       discord: { ...n.discord, webhookUrl: n.discord.webhookUrl ? SECRET : '' },
@@ -76,6 +78,22 @@ function applySettings(cur, patch) {
   if (typeof patch.cookies === 'string') cur.cookies = patch.cookies.trim().slice(0, 20000);
   if ('maxAlertAgeMin' in patch) cur.maxAlertAgeMin = clamp(Math.round(toNumber(patch.maxAlertAgeMin) || 60), 5, 1440);
   if ('hidePlaceholderPrices' in patch) cur.hidePlaceholderPrices = Boolean(patch.hidePlaceholderPrices);
+  if (patch.deals && typeof patch.deals === 'object') {
+    const d = patch.deals;
+    const num = (v, lo, hi, dflt) => clamp(toNumber(v) ?? dflt, lo, hi);
+    if ('minProfit' in d) cur.deals.minProfit = num(d.minProfit, 0, 100000, 40);
+    if ('minMarginPct' in d) cur.deals.minMarginPct = num(d.minMarginPct, 0, 95, 25);
+    if ('otherCosts' in d) cur.deals.otherCosts = num(d.otherCosts, 0, 10000, 10);
+    if ('askToSalePct' in d) cur.deals.askToSalePct = num(d.askToSalePct, 40, 120, 90);
+    if ('readDetails' in d) cur.deals.readDetails = Boolean(d.readDetails);
+  }
+  if (patch.ai && typeof patch.ai === 'object') {
+    const a = patch.ai;
+    if ('enabled' in a) cur.ai.enabled = Boolean(a.enabled);
+    if (typeof a.apiKey === 'string' && a.apiKey !== SECRET) cur.ai.apiKey = a.apiKey.trim().slice(0, 300);
+    if (typeof a.model === 'string' && AI_MODELS[a.model]) cur.ai.model = a.model;
+    if ('maxPerDay' in a) cur.ai.maxPerDay = clamp(Math.round(toNumber(a.maxPerDay) ?? 60), 0, 2000);
+  }
   if (patch.quietHours && typeof patch.quietHours === 'object') {
     const q = patch.quietHours;
     if ('enabled' in q) cur.quietHours.enabled = Boolean(q.enabled);
@@ -110,12 +128,16 @@ export async function createApp(overrides = {}) {
   const hub = new Hub();
   const fb = new FacebookClient({ store, config });
   const notifier = new Notifier(store);
-  const monitor = new Monitor({ store, fb, notifier, fbBase: config.fbBase, gapMs: config.scanGapMs });
+  const ai = new AiAdvisor({ store, clientFactory: overrides.aiClientFactory });
+  const monitor = new Monitor({ store, fb, notifier, ai, fbBase: config.fbBase, gapMs: config.scanGapMs });
+  // Listings saved by an older version have no pile yet: judge them once.
+  if (Object.values(store.listings).some((l) => !l.pile)) monitor.reevaluate();
 
   const publicWatch = (w) => ({ ...w, searchUrl: buildSearchUrl(w, config.fbBase) });
 
   monitor.on('listings', (items) => hub.send('listings', items));
   monitor.on('updates', (items) => hub.send('updates', items));
+  monitor.on('alert', (items) => hub.send('alert', items));
   monitor.on('watch', (w) => hub.send('watch', publicWatch(w)));
   monitor.on('log', (e) => hub.send('log', e));
   monitor.on('notify', (errors) => hub.send('notify', errors));
@@ -140,8 +162,26 @@ export async function createApp(overrides = {}) {
     routes.push({ method, re, keys, fn });
   };
 
+  // How often your thumbs-up / thumbs-down agreed with the deal checker.
+  const accuracy = () => {
+    const s = { dealsRight: 0, dealsWrong: 0, missed: 0, rightSkips: 0 };
+    for (const l of Object.values(store.listings)) {
+      if (!l.feedback) continue;
+      if (l.pile === 'deals') s[l.feedback === 'good' ? 'dealsRight' : 'dealsWrong']++;
+      else s[l.feedback === 'good' ? 'missed' : 'rightSkips']++;
+    }
+    return s;
+  };
+  const aiInfo = () => ({
+    usage: ai.usage(),
+    lastError: ai.lastError,
+    models: Object.fromEntries(Object.entries(AI_MODELS).map(([k, v]) => [k, v.label])),
+  });
+
   add('GET', '/api/state', async () => ({
     version: VERSION,
+    accuracy: accuracy(),
+    ai: aiInfo(),
     demo: config.demo,
     settings: maskSettings(store.settings),
     watches: store.watches.map(publicWatch),
@@ -169,7 +209,14 @@ export async function createApp(overrides = {}) {
   add('PUT', '/api/watches/:id', async ({ params, body }) => {
     const existing = store.getWatch(params.id);
     if (!existing) throw new HttpError(404, 'That watch no longer exists.');
+    const judged = (x) => JSON.stringify([x.resaleValue, x.sellOn, x.shipCost, x.include, x.exclude, x.minPrice, x.maxPrice, x.query]);
+    const before = judged(existing);
     const w = store.updateWatch(params.id, cleanWatchInput(body, existing));
+    if (judged(w) !== before) {
+      // Resale price, fees or filters changed: re-judge what this watch already found.
+      monitor.reevaluate(w.id);
+      hub.send('reload', { reason: 'watch' });
+    }
     hub.send('watch', publicWatch(w));
     monitor.emitStatus();
     monitor.tick();
@@ -194,6 +241,12 @@ export async function createApp(overrides = {}) {
     if (!l) throw new HttpError(404, 'Listing not found.');
     if ('saved' in body) l.saved = Boolean(body.saved);
     if ('hidden' in body) l.hidden = Boolean(body.hidden);
+    if ('feedback' in body) {
+      // Your call wins: thumbs-up moves it to Deals, thumbs-down to Unsorted.
+      l.feedback = body.feedback === 'good' || body.feedback === 'bad' ? body.feedback : null;
+      l.pileOverride = l.feedback === 'good' ? 'deals' : l.feedback === 'bad' ? 'unsorted' : null;
+      hub.send('accuracy', accuracy());
+    }
     store.save();
     hub.send('updates', [l]);
     return l;
@@ -214,8 +267,15 @@ export async function createApp(overrides = {}) {
 
   add('PUT', '/api/settings', async ({ body }) => {
     const before = store.settings.engine;
+    const rulesBefore = JSON.stringify([store.settings.deals, store.settings.hidePlaceholderPrices]);
     applySettings(store.settings, body);
     store.save();
+    if (JSON.stringify([store.settings.deals, store.settings.hidePlaceholderPrices]) !== rulesBefore) {
+      // New deal rules: re-sort everything already found.
+      monitor.reevaluate();
+      hub.send('reload', { reason: 'rules' });
+    }
+    if (body.ai) hub.send('ai', aiInfo());
     if (before !== store.settings.engine) fb.httpPausedUntil = 0;
     const masked = maskSettings(store.settings);
     hub.send('settings', masked);
@@ -235,6 +295,15 @@ export async function createApp(overrides = {}) {
     } catch (e) {
       throw new HttpError(400, `Test failed: ${e.message}`);
     }
+  });
+
+  add('POST', '/api/ai/test', async () => {
+    if (!ai.enabled()) throw new HttpError(400, 'Turn on the AI check and add an Anthropic API key first.');
+    const sample = { id: 'test', title: 'PS5 disc edition with 2 controllers', price: 250, priceText: '$250', locationText: 'Tampa, FL', photo: null };
+    const r = await ai.assess(sample, { sellOn: 'local' });
+    hub.send('ai', aiInfo());
+    if (!r.ok) throw new HttpError(400, `AI check failed: ${r.message}`);
+    return { ok: true, item: r.item, low: r.low, high: r.high, model: r.model, costUsd: r.costUsd };
   });
 
   add('POST', '/api/parse-url', async ({ body }) => {

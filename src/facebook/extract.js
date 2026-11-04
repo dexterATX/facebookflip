@@ -329,3 +329,84 @@ export function normalizeDomCard(card, base = 'https://www.facebook.com') {
     url: itemUrl(m[1], base),
   };
 }
+
+// ---------------------------------------------------------------------------
+// A single listing's page: description, condition, sold state, photos.
+
+const CONDITION_NAMES = {
+  new: 'New',
+  used: 'Used',
+  used_like_new: 'Used - like new',
+  used_good: 'Used - good',
+  used_fair: 'Used - fair',
+  used_poor: 'Used - poor',
+  refurbished: 'Refurbished',
+};
+
+export function conditionName(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const key = raw.replace(/^PC_/i, '').toLowerCase().trim();
+  return CONDITION_NAMES[key] || raw.replace(/^PC_/i, '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+}
+
+function textOf(v) {
+  if (!v) return null;
+  if (typeof v === 'string') return v;
+  if (typeof v.text === 'string') return v.text;
+  return null;
+}
+
+/** Pulls description/condition for listing `id` out of an item page (and any captured GraphQL). */
+export function extractItemDetails(html, id, extraJson = []) {
+  const docs = [];
+  for (const m of String(html || '').matchAll(SCRIPT_RE)) {
+    if (!JSON_TYPE_RE.test(m[1])) continue;
+    const body = m[2].trim();
+    if (!body || (body[0] !== '{' && body[0] !== '[')) continue;
+    try {
+      docs.push(JSON.parse(body));
+    } catch {
+      /* not JSON */
+    }
+  }
+  for (const t of extraJson) docs.push(...parseJsonStream(t));
+
+  const found = { description: null, condition: null, sold: false, pending: false, photos: [] };
+  let matched = false;
+  const visit = (node, depth) => {
+    if (depth > MAX_DEPTH || !node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const v of node) visit(v, depth + 1);
+      return;
+    }
+    if (String(node.id ?? '') === String(id)) {
+      matched = true;
+      found.description ||= textOf(node.redacted_description) || textOf(node.description) || null;
+      found.condition ||= conditionName(node.condition || node.marketplace_listing_condition || null);
+      if (node.is_sold === true) found.sold = true;
+      if (node.is_pending === true) found.pending = true;
+      if (Array.isArray(node.listing_photos) && !found.photos.length) {
+        found.photos = node.listing_photos.map((p) => p?.image?.uri).filter((u) => typeof u === 'string').slice(0, 6);
+      }
+    }
+    for (const k in node) {
+      const v = node[k];
+      if (v && typeof v === 'object') visit(v, depth + 1);
+    }
+  };
+  for (const d of docs) visit(d, 0);
+
+  if (!found.description) {
+    // Fallback: the page's own summary tag.
+    const m = String(html || '').match(/<meta\s+(?:property|name)=["']og:description["']\s+content=["']([^"']*)["']/i);
+    if (m) {
+      found.description = m[1].replace(/&#039;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+      matched = true;
+    }
+  }
+  if (found.description) {
+    // Keep line breaks: they separate sentences for the red-flag checks.
+    found.description = found.description.replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim().slice(0, 3000);
+  }
+  return matched ? found : null;
+}

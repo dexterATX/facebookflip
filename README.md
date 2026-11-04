@@ -1,8 +1,8 @@
 # FlipRadar
 
-**See new Facebook Marketplace listings within minutes of posting, with a photo alert on your phone.**
+**See new Facebook Marketplace listings within minutes of posting, and get pinged only for the ones worth flipping.**
 
-FlipRadar watches the Marketplace searches you care about, newest first, and pings you as soon as something new shows up, so you can message the seller before anyone else does.
+FlipRadar watches the Marketplace searches you care about, newest first. Every new listing is checked as a flip: what it resells for, what you'd make after costs, and red flags. Good deals go to your **Deals** pile and your phone. Everything else lands in an **Unsorted** pile with the reason, so a wrong call never costs you a listing.
 
 <p align="center">
   <img src="docs/screenshot-desktop.jpg" alt="FlipRadar dashboard with live listings" width="74%">
@@ -18,9 +18,11 @@ FlipRadar watches the Marketplace searches you care about, newest first, and pin
   - Hides "$1, message me" bait listings. Free items still show.
   - Ignores old listings that Facebook bumps back to the top. It reads each listing's real posting time.
   - Never alerts twice for the same listing, even if two searches find it.
-- **Deal spotting.** Compares each price with *similar* listings it has seen in that search. A $40 PS5 controller is compared with other controllers, not with $400 consoles. It flags steals and price drops, and can alert you **only** on deals if you prefer.
+- **Deal checking.** Every listing gets an estimated resale price, profit and margin, plus a plain reason. Possible deals get a closer look at the full listing before you're alerted. See [How it decides what's a deal](#how-it-decides-whats-a-deal).
+- **Two piles, nothing lost.** **Deals** alert you. **Unsorted** keeps everything else with its reason, like "only +$12 profit" or "for parts (doesn't turn on)". 👍/👎 any listing to move it, and FlipRadar keeps score of how often it was right.
+- **Optional AI second opinion.** With your own Anthropic API key, Claude identifies the exact item, reads the condition and photo, and estimates what it really sells for. It only checks possible deals, with a daily cap.
 - **Gentle on Facebook.** It runs one check at a time with randomized timing, backs off automatically, and pauses everything if Facebook pushes back instead of hammering it. Optional quiet hours overnight.
-- **Clean dashboard.** A live feed with photos, Saved and Deals tabs, and an activity log. It works on your phone too.
+- **Clean dashboard.** A live feed with photos, Deals / Unsorted / Saved tabs, a "why?" breakdown on every listing, and an activity log. It works on your phone too.
 
 ## Try it in 1 minute without Facebook
 
@@ -52,6 +54,38 @@ You need a computer that stays on while you want alerts. Your everyday Windows o
 5. **Turn on phone alerts.** Click the settings icon (top right) and follow the three ntfy steps, then tap **Send test**.
 
 That's it. New listings appear on the dashboard and on your phone.
+
+## How it decides what's a deal
+
+<p align="center"><img src="docs/screenshot-deal-check.jpg" alt="The deal check for one listing: resale estimate, profit math, reasons and the seller's description" width="70%"></p>
+
+Resellers judge a flip by what an item actually **sells** for, minus every cost. FlipRadar does the same, in four steps:
+
+1. **Red flags first.** "For parts", "doesn't turn on", iCloud-locked, "ISO"/wanted posts, replicas, rentals and payment plans, box-only listings, and scam wording ("Zelle only", "shipping only", deposits). Negations don't count: "not broken" and "no scratches" are fine.
+2. **What it resells for.** In order of trust:
+   - **Your number.** Set "Resells for about" on a watch, and FlipRadar uses it. Exception: if similar listings show the item sells for far less (a $45 controller in a PS5 search), it trusts those instead.
+   - **Similar listings.** FlipRadar remembers 30 days of prices. It compares each listing with ones whose titles share real words beyond your search words, so controllers are compared with controllers, not consoles. Marketplace prices are *asking* prices, so it assumes items sell for 90% of asking (adjustable).
+   - **The optional AI**, cross-checked against the above. When the AI and similar listings disagree, FlipRadar uses the lower number and marks the call less certain.
+3. **Profit.** Resale − asking price − selling fees − your other costs (gas, cleaning, time; $10 by default). Selling locally has no fees. eBay is counted at 13.6% + $0.40 per sale + the shipping you enter. Published 2026 figures range from 12.9% to 13.6%, so check your own fees in eBay Seller Hub.
+4. **Verdict.** It's a **deal** only if the profit is at least $40 **and** at least 25% of the resale price, nothing blocks it, and the estimate is at least medium confidence. All of these are adjustable in Settings. Anything unsure goes to **Unsorted** with the reason.
+
+**Before alerting about a possible deal**, FlipRadar opens the full listing to read the description and condition, since problems often show up only there. With the AI on, Claude takes a look too. Deal alerts go out right after, usually within seconds.
+
+**Too good to be true?** A price under about 12% of resale value is treated as a likely scam, and so is under 40% with scam-style payment wording. Between 12% and 25% it's still allowed as a deal, with a "see it in person before paying" warning. If something is far under *your* resale price and no similar listings confirm it's the same item, it goes to Unsorted as "check it is the same item".
+
+**How accurate is it?** It's a careful estimate, not a guarantee:
+
+- On day one there's little price history, so expect more "not enough price info" in Unsorted. It gets sharper as listings come in.
+- For the most accurate calls from the start, give each watch a "resells for" price, or turn on the AI.
+- Use 👍/👎 on listings. FlipRadar shows how often its deals were right, so you can see whether to tighten your rules.
+
+### AI second opinion (optional)
+
+Settings → **AI second opinion**: paste an Anthropic API key from [console.anthropic.com](https://console.anthropic.com/settings/keys), switch it on, and tap **Test the AI**.
+
+- **Which model.** Claude Opus 5.5 is the default and most accurate (about 3¢ per check). Sonnet 5.5 costs about 1–2¢ and Haiku 5.5 about 0.1¢.
+- **Cost control.** Only possible deals are checked, and there's a daily cap (60 by default). Today's spend shows in Settings.
+- **Refusals.** If the model declines a request for policy reasons, Anthropic retries it on its recommended fallback model.
 
 ## How fast is "fast"?
 
@@ -121,13 +155,15 @@ While the dashboard is open, it also plays a sound and can show desktop notifica
 - **Reading listings:** Facebook embeds the first page of results as JSON (structured data) inside the page. Instead of trusting one fixed path through that data, FlipRadar walks all of it and keeps every object shaped like a listing: one with an `id` and a `marketplace_listing_title`. It skips sponsored stories. In browser mode, it also reads Facebook's own data responses, and as a last resort the visible listing cards. See `src/facebook/extract.js`.
 - **Fast mode** sends the same headers Chrome sends when opening a page, and keeps Facebook's guest cookie like a returning visitor (`src/facebook/http.js`). **Browser mode** drives your installed Chrome or Edge with its own profile (`src/facebook/browser.js`).
 - **New vs. old:** the first check of a watch is a quiet baseline. After that, a listing alerts if FlipRadar hasn't seen it before *and* it was posted within your alert window, 60 minutes by default (`src/monitor.js`).
-- **Deals:** the median price of similar listings (shared title words) from that watch over 14 days (`src/deals.js`).
+- **Deals:** red flags, resale estimate, profit math and the verdict live in `src/evaluate.js`. The closer look (full listing, then AI) runs in `src/monitor.js`, and the optional AI is in `src/ai.js`.
 
 ```text
 src/
   server.js          web server, JSON API, live updates (Server-Sent Events)
   monitor.js         scheduler: timing, backoff, new-listing detection, alerts
-  deals.js           filters and deal scoring
+  evaluate.js        the deal check: red flags, resale estimate, profit, verdict
+  ai.js              optional AI second opinion (Claude)
+  deals.js           your filters and text helpers
   notify.js          ntfy, Discord, Telegram
   store.js           saves everything to data/db.json
   facebook/          links, page reading, fast mode, browser mode

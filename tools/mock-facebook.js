@@ -115,8 +115,9 @@ export function svgFor(id, art) {
 }
 
 export class MockFacebook {
-  constructor({ autoAdd = true, minAddSec = 25, maxAddSec = 75, seedCount = 22 } = {}) {
+  constructor({ autoAdd = true, minAddSec = 25, maxAddSec = 75, seedCount = 22, bargainEvery = 8 } = {}) {
     this.autoAdd = autoAdd;
+    this.bargainEvery = bargainEvery; // about 1 in N listings is priced well under typical
     this.minAddSec = minAddSec;
     this.maxAddSec = maxAddSec;
     this.seedCount = seedCount;
@@ -171,9 +172,19 @@ export class MockFacebook {
       title = `${q.charAt(0).toUpperCase()}${q.slice(1)}, ${adj}`;
       typical = 120;
     }
-    const factor = r[6] % 8 === 0 ? 0.45 + (0.2 * r[3]) / 255 : 0.8 + (0.4 * r[3]) / 255; // 1 in 8 is a bargain
+    const factor = r[6] % this.bargainEvery === 0 ? 0.45 + (0.2 * r[3]) / 255 : 0.8 + (0.4 * r[3]) / 255;
     const price = Math.max(5, Math.round((typical * factor) / 5) * 5);
     const [city, state] = pick(PLACES, r[4] / 255);
+    // What the seller wrote. Some are trouble, which FlipRadar should catch.
+    const roll = r[7] % 100;
+    const [description, condition] =
+      roll < 12
+        ? [pick(["Doesn't turn on, selling for parts.", 'Screen is cracked, for parts or repair.', 'Not working, needs repair. Sold as is.'], r[8] / 255), 'PC_USED_FAIR']
+        : roll < 18
+          ? [pick(['Zelle only, I can ship it to you after payment.', 'Need a deposit to hold it. Shipping only.'], r[8] / 255), 'PC_USED_LIKE_NEW']
+          : roll < 30
+            ? [pick(['Some scratches on the side but works fine.', 'Small stain on one side, otherwise great.', 'Missing the original box, works great.'], r[8] / 255), 'PC_USED_GOOD']
+            : [pick(['Works perfectly, no issues. Pick up only.', 'Barely used, like new. Cash at pickup.', 'Great condition, moving and need it gone.', 'Smoke-free home. No scratches, nothing missing.', 'Selling because I upgraded. Everything works.'], r[8] / 255), 'PC_USED_LIKE_NEW'];
     const listing = {
       id,
       title,
@@ -182,6 +193,8 @@ export class MockFacebook {
       city,
       state,
       art,
+      description,
+      condition,
       creationTime: Math.floor((Date.now() - ageMs) / 1000),
       sold: false,
       pending: false,
@@ -370,9 +383,28 @@ fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application
     let l = null;
     for (const s of this.streams.values()) l = l || s.items.find((x) => x.id === id);
     if (!l) return null;
+    // Same shape Facebook uses for a listing page: the details live under
+    // marketplace_product_details_page.target, as JSON inside a script tag.
+    const target = {
+      __typename: 'GroupCommerceProductItem',
+      id: l.id,
+      marketplace_listing_title: l.title,
+      redacted_description: { text: l.description || '' },
+      condition: l.condition || null,
+      is_sold: l.sold,
+      is_pending: l.pending,
+      is_live: !l.sold,
+      creation_time: l.creationTime,
+      listing_price: { formatted_amount: `$${l.price}`, amount: `${l.price}.00` },
+      listing_photos: [{ image: { uri: l.photo } }],
+      location_text: { text: `${l.city}, ${l.state}` },
+    };
+    const payload = { require: [['RelayPrefetchedStreamCache', 'next', [], ['adp_MarketplacePDPContainerQueryRelayPreloader_1', { __bbox: { complete: true, result: { data: { viewer: { marketplace_product_details_page: { target } } } } } }]]] };
+    const json = JSON.stringify(payload).replace(/</g, '\\u003C');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(l.title)} (demo)</title>
+<script type="application/json" data-sjs>${json}</script>
 <style>body{font:16px system-ui,sans-serif;background:#f0f2f5;margin:0;display:grid;place-items:center;min-height:100vh}main{background:#fff;border-radius:12px;max-width:520px;width:92%;overflow:hidden;box-shadow:0 4px 20px #0002}img{width:100%;display:block}div{padding:18px}h1{font-size:22px;margin:4px 0}p{color:#555}b{font-size:20px}</style></head>
-<body><main><img src="${escapeHtml(l.photo)}" alt=""><div><b>$${l.price}</b><h1>${escapeHtml(l.title)}</h1><p>${escapeHtml(l.city)}, ${escapeHtml(l.state)} · listed ${new Date(l.creationTime * 1000).toLocaleString()}</p><p>This is a demo listing from FlipRadar's pretend Marketplace. With the real app, this button opens the listing on Facebook.</p></div></main></body></html>`;
+<body><main><img src="${escapeHtml(l.photo)}" alt=""><div><b>$${l.price}</b><h1>${escapeHtml(l.title)}</h1><p>${escapeHtml(l.city)}, ${escapeHtml(l.state)} · listed ${new Date(l.creationTime * 1000).toLocaleString()}</p><p><i>${escapeHtml(l.description || '')}</i></p><p>This is a demo listing from FlipRadar's pretend Marketplace. With the real app, this button opens the listing on Facebook.</p></div></main></body></html>`;
   }
 
   handle(req, res) {

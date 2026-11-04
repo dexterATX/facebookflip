@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSearchUrl, parseMarketplaceUrl, cleanLocation } from '../src/facebook/urls.js';
 import { parseCookieInput, CookieJar, hasSession, toCookieHeader } from '../src/facebook/cookies.js';
-import { passesFilters, dealScore, hasTerm, titleWords } from '../src/deals.js';
+import { passesFilters, filterReason, hasTerm, titleWords } from '../src/deals.js';
 
 test('search links are always newest-first and last-24-hours', () => {
   const u = new URL(buildSearchUrl({ query: 'road bike', location: 'Tampa', minPrice: 50.6, maxPrice: 600.2 }));
@@ -76,26 +76,13 @@ test('filters: price range, $1 bait, include/exclude words', () => {
   assert.ok(hasTerm(' café table ', 'cafe'));
 });
 
-test('deal score compares with similar listings, not the whole search', () => {
-  const pool = [];
-  const add = (title, price) => pool.push({ id: String(pool.length + 1), title, price });
-  for (const p of [400, 420, 380, 410, 395]) add('PS5 disc edition console', p);
-  for (const p of [45, 50, 55, 48]) add('PS5 DualSense controller white', p);
-  const words = ['ps5'];
-  const controller = dealScore({ id: 'x', title: 'PS5 controller, like new', price: 40 }, pool, words);
-  assert.equal(controller.median, 49, 'compared with other controllers');
-  assert.equal(controller.label, 'good');
-  const console1 = dealScore({ id: 'y', title: 'PlayStation PS5 disc edition', price: 230 }, pool, words);
-  assert.equal(console1.label, 'steal');
-  assert.equal(console1.median, 400);
-  assert.equal(dealScore({ id: 'z', title: 'PS5 disc console', price: 400 }, pool, words).label, 'fair');
-  assert.equal(dealScore({ id: 'z', title: 'PS5 disc console', price: 560 }, pool, words).label, 'high');
-  // Unrelated title + widely spread prices: no guess.
-  assert.equal(dealScore({ id: 'w', title: 'PS5 vertical stand', price: 10 }, pool, words), null);
-  // Tightly grouped search: whole-watch median is fine.
-  const tight = [200, 210, 190, 220, 205, 195, 230, 180].map((p, i) => ({ id: `t${i}`, title: `Item ${i}`, price: p }));
-  assert.equal(dealScore({ id: 'q', title: 'Something', price: 100 }, tight).label, 'steal');
-  assert.equal(dealScore({ id: 'q', title: 'Something', price: 1 }, tight), null);
-  assert.equal(dealScore({ id: 'q', title: 'Something', price: 100 }, tight.slice(0, 3)), null, 'needs enough data');
+test('filter reasons say exactly why a listing went to Unsorted', () => {
+  const w = { minPrice: 50, maxPrice: 500, include: ['trek'], exclude: ['for parts'] };
+  const s = { hidePlaceholderPrices: true };
+  assert.equal(filterReason({ title: 'Trek bike', price: 120 }, w, s), null);
+  assert.equal(filterReason({ title: 'Trek bike', price: 20 }, w, s), 'Under your minimum price ($50)');
+  assert.equal(filterReason({ title: 'Trek bike for parts', price: 120 }, w, s), 'Has your skip word "for parts"');
+  assert.match(filterReason({ title: 'Huffy bike', price: 120 }, w, s), /must-have words \(trek\)/);
+  assert.equal(filterReason({ title: 'Message me', price: 1 }, { ...w, include: [], minPrice: null }, s), '"$1" placeholder price');
   assert.deepEqual([...titleWords('PS5 Disc Edition + 2 controllers, great condition')], ['ps5', 'disc', 'edition', 'controller']);
 });

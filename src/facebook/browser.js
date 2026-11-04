@@ -134,6 +134,7 @@ export class BrowserEngine {
   }
 
   async scanPage() {
+    if (this.shutDown) throw new Error('FlipRadar is shutting down.');
     if (this.ctx && this.page && !this.page.isClosed()) return this.page;
     await this.closeNow();
     const ctx = await this.launch({ headless: true });
@@ -180,13 +181,15 @@ export class BrowserEngine {
     if (ctx) await ctx.close().catch(() => {});
   }
 
+  /** Final shutdown: closes the browser and refuses to start it again. */
   close() {
+    this.shutDown = true;
     clearTimeout(this.idleTimer);
     return this.run(() => this.closeNow());
   }
 
   /** Load a search page and capture everything we might parse listings from. */
-  search(url, { cookies = [] } = {}) {
+  search(url, { cookies = [], waitSelector = 'a[href*="/marketplace/item/"], #login_form, form[action*="/login"]', settleMs = 1200 } = {}) {
     return this.run(async () => {
       const t0 = Date.now();
       const page = await this.scanPage();
@@ -202,10 +205,8 @@ export class BrowserEngine {
         const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
         status = resp ? resp.status() : 0;
         docHtml = resp ? await resp.text().catch(() => '') : '';
-        await page
-          .waitForSelector('a[href*="/marketplace/item/"], #login_form, form[action*="/login"]', { timeout: 15000 })
-          .catch(() => {});
-        await page.waitForTimeout(1200);
+        await page.waitForSelector(waitSelector, { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(settleMs);
       } finally {
         page.off('response', onResponse);
       }

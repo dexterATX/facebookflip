@@ -1,6 +1,4 @@
-// The "smart" part: keyword filters, junk-price filtering and deal scoring.
-
-import { median } from './util.js';
+// Text helpers and the user's own filters (price range, include/skip words).
 
 /** Words that usually mean "not what you want" on Marketplace. Offered as a one-click add. */
 export const JUNK_WORDS = [
@@ -18,11 +16,12 @@ export const JUNK_WORDS = [
   'read description',
 ];
 
-const norm = (s) =>
+/** Lowercase, strip accents and punctuation, pad with spaces: " trek fx 2 bike ". */
+export const norm = (s) =>
   ` ${String(s || '')
     .toLowerCase()
     .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .replace(/[^\p{L}\p{N}$]+/gu, ' ')
     .trim()} `;
 
@@ -35,21 +34,28 @@ function includesTerm(text, term) {
 /** Matches whole words, or the start of a word ("broke" matches "broken"). Accents and case are ignored. */
 export const hasTerm = (text, term) => includesTerm(norm(text), term);
 
-export function passesFilters(listing, watch, settings = {}) {
+/**
+ * Why a listing fails the watch's own filters, or null if it passes.
+ * (Listings that fail are kept in the Unsorted pile with this reason.)
+ */
+export function filterReason(listing, watch, settings = {}) {
   const p = listing.price;
   if (p !== null && p !== undefined) {
-    if (watch.minPrice != null && p < watch.minPrice) return false;
-    if (watch.maxPrice != null && p > watch.maxPrice) return false;
+    if (watch.minPrice != null && p < watch.minPrice) return `Under your minimum price ($${watch.minPrice})`;
+    if (watch.maxPrice != null && p > watch.maxPrice) return `Over your maximum price ($${watch.maxPrice})`;
     // "$1" listings are almost always bait ("message me for price").
-    if (settings.hidePlaceholderPrices && p > 0 && p <= 1) return false;
+    if (settings.hidePlaceholderPrices && p > 0 && p <= 1) return '"$1" placeholder price';
   }
   const text = norm(listing.title);
-  if (watch.exclude?.length && watch.exclude.some((t) => includesTerm(text, t))) return false;
-  if (watch.include?.length && !watch.include.some((t) => includesTerm(text, t))) return false;
-  return true;
+  const skip = watch.exclude?.find((t) => includesTerm(text, t));
+  if (skip) return `Has your skip word "${skip}"`;
+  if (watch.include?.length && !watch.include.some((t) => includesTerm(text, t))) {
+    return `Missing your must-have words (${watch.include.slice(0, 3).join(', ')})`;
+  }
+  return null;
 }
 
-export const DEAL_LABELS = ['steal', 'great', 'good'];
+export const passesFilters = (listing, watch, settings) => !filterReason(listing, watch, settings);
 
 const STOP = new Set(
   ('a an and are as at be by for from in is it of on or the to with this that new used like great good nice excellent ' +
@@ -58,7 +64,7 @@ const STOP = new Set(
     .split(' '),
 );
 
-/** Meaningful words of a title: "PS5 Disc Edition + 2 controllers" -> ps5, disc, edition, controllers */
+/** Meaningful words of a title: "PS5 Disc Edition + 2 controllers" -> ps5, disc, edition, controller */
 export function titleWords(title) {
   const out = new Set();
   for (const w of norm(title).trim().split(' ')) {
@@ -68,56 +74,9 @@ export function titleWords(title) {
   return out;
 }
 
-function quantile(sorted, q) {
+export function quantile(sorted, q) {
+  if (!sorted.length) return null;
   const i = (sorted.length - 1) * q;
   const lo = Math.floor(i);
   return sorted[lo] + (sorted[Math.ceil(i)] - sorted[lo]) * (i - lo);
 }
-
-/**
- * How does this price compare with what similar listings went for?
- *
- * "Similar" means listings from the same watch whose titles share words beyond
- * the search words themselves, so a $40 PS5 controller is compared with other
- * controllers, not with $400 consoles. With too few similar listings we only
- * fall back to the whole watch when its prices are tightly grouped; otherwise
- * we say nothing rather than guess.
- */
-export function dealScore(listing, pool, searchWords = []) {
-  const price = listing?.price;
-  if (price === null || price === undefined || price <= 1) return null;
-  const skip = new Set(searchWords.flatMap((w) => [...titleWords(w)]));
-  const minus = (set) => new Set([...set].filter((w) => !skip.has(w)));
-  const mine = minus(titleWords(listing.title));
-  const others = pool.filter((o) => o.id !== listing.id && o.price > 1);
-
-  let basis = null;
-  if (mine.size) {
-    const comps = others.filter((o) => {
-      const theirs = minus(titleWords(o.title));
-      let shared = 0;
-      for (const w of mine) if (theirs.has(w)) shared++;
-      // Two words in common, or at least half of this (short) title's words.
-      return shared >= 2 || (shared >= 1 && shared / mine.size >= 0.5);
-    });
-    if (comps.length >= 4) basis = comps.map((o) => o.price);
-  }
-  if (!basis && others.length >= 8) {
-    const xs = others.map((o) => o.price).sort((a, b) => a - b);
-    const med = median(xs);
-    if (med && (quantile(xs, 0.75) - quantile(xs, 0.25)) / med <= 0.5) basis = xs;
-  }
-  if (!basis) return null;
-
-  const med = median(basis);
-  if (!med) return null;
-  const pct = (med - price) / med;
-  let label = 'fair';
-  if (pct >= 0.4) label = 'steal';
-  else if (pct >= 0.25) label = 'great';
-  else if (pct >= 0.12) label = 'good';
-  else if (pct <= -0.3) label = 'high';
-  return { label, pct: Math.round(pct * 100), median: Math.round(med), n: basis.length };
-}
-
-export const isDeal = (l) => Boolean(l.deal && DEAL_LABELS.includes(l.deal.label));

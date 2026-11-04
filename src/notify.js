@@ -21,16 +21,19 @@ export function formatAlert(kind, l, watch, now = Date.now()) {
   const title =
     kind === 'drop' ? `Price drop ${l.prevPriceText || `$${l.prevPrice}`} → ${price} · ${l.title}` : `${price} · ${l.title}`;
   const parts = [];
+  const ev = l.eval;
+  const isDeal = ev?.verdict === 'deal' && typeof ev.profit === 'number';
+  if (isDeal) parts.push(`+$${ev.profit} profit, resells ~$${ev.resale.value}`);
   if (l.locationText) parts.push(l.locationText);
   if (l.creationTime) parts.push(`posted ${ago(now - l.creationTime)}`);
-  if (l.deal && ['steal', 'great', 'good'].includes(l.deal.label)) parts.push(`${l.deal.pct}% under typical $${l.deal.median}`);
+  const warn = ev?.flags?.find((f) => f.kind === 'warn');
   return {
     title: title.slice(0, 200),
-    body: parts.join(' · '),
+    body: parts.join(' · ') + (warn ? `\n⚠ ${warn.text}` : ''),
     watchName: watch?.name || '',
     url: l.url || null,
     image: l.photo || null,
-    hot: Boolean(l.deal && ['steal', 'great'].includes(l.deal.label)) || kind === 'drop',
+    hot: kind === 'drop' || (isDeal && (ev.profit >= 100 || ev.margin >= 0.5)),
   };
 }
 

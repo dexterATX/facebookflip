@@ -71,12 +71,12 @@ async function waitUntil(fn, ms = 10000) {
   }
 }
 
-async function boot(t, { engine = 'fast', browserPath = '' } = {}) {
-  const mock = new MockFacebook({ autoAdd: false, seedCount: 10 });
+async function boot(t, { engine = 'fast', browserPath = '', seedCount = 10 } = {}) {
+  const mock = new MockFacebook({ autoAdd: false, seedCount });
   const fbBase = await mock.listen(0);
   const ntfy = await fakeNtfy();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-e2e-'));
-  const app = await createApp({ fbBase, dataDir, scanGapMs: 50, host: '127.0.0.1', demo: false, browserPath });
+  const app = await createApp({ fbBase, dataDir, scanGapMs: 50, requestGapMs: 20, host: '127.0.0.1', demo: false, browserPath });
   const addr = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${addr.port}`;
   const api = async (p, { method = 'GET', body, headers = {} } = {}) => {
@@ -99,7 +99,7 @@ async function boot(t, { engine = 'fast', browserPath = '' } = {}) {
 test('finds listings, alerts on a brand-new one within one check, and handles a login wall', async (t) => {
   const { mock, fbBase, ntfy, api, events } = await boot(t);
 
-  const created = await api('/api/watches', { method: 'POST', body: { query: 'bike', location: 'tampa', maxPrice: 5000 } });
+  const created = await api('/api/watches', { method: 'POST', body: { query: 'bike', location: 'tampa', maxPrice: 5000, alertMode: 'all' } });
   assert.equal(created.status, 200);
   const w = created.body;
   assert.equal(w.name, 'bike');
@@ -112,7 +112,8 @@ test('finds listings, alerts on a brand-new one within one check, and handles a 
 
   const fresh = mock.add('bike', 'tampa', { ageMs: 30e3, title: 'Trek Domane SL5 road bike', price: 333 });
   await api(`/api/watches/${w.id}/scan`, { method: 'POST' });
-  const items = await events.waitFor('listings', (ls) => ls.some((l) => l.id === fresh.id));
+  await events.waitFor('listings', (ls) => ls.some((l) => l.id === fresh.id));
+  const items = await events.waitFor('alert', (ls) => ls.some((l) => l.id === fresh.id));
   const got = items.find((l) => l.id === fresh.id);
   assert.ok(got.alertedAt, 'new listing raised an alert');
   assert.equal(got.price, 333);
@@ -145,6 +146,48 @@ test('finds listings, alerts on a brand-new one within one check, and handles a 
   mock.mode = 'ok';
   await api('/api/resume', { method: 'POST' });
   await waitUntil(async () => (await api('/api/state')).body.status.problem === null);
+});
+
+test('deals pipeline: reads the full listing, alerts only the real deal, and learns from your feedback', async (t) => {
+  const { mock, ntfy, api, events } = await boot(t, { seedCount: 0 });
+  // Price history: eight consoles asking about $400, posted hours ago.
+  for (const p of [400, 410, 390, 405, 395, 420, 380, 400]) mock.add('ps5', 'tampa', { title: 'PS5 disc edition console', price: p, ageMs: 10 * 3600e3, description: 'Works great.' });
+  const w = (await api('/api/watches', { method: 'POST', body: { query: 'ps5', location: 'tampa' } })).body;
+  assert.equal(w.alertMode, 'deals');
+  await waitUntil(async () => (await api('/api/state')).body.watches[0].lastStatus?.ok);
+  assert.equal(ntfy.got.length, 0, 'baseline: nothing to alert');
+
+  const good = mock.add('ps5', 'tampa', { title: 'PS5 disc edition', price: 200, ageMs: 60e3, description: 'Barely used, works perfectly. Pick up today.', condition: 'PC_USED_LIKE_NEW' });
+  const broken = mock.add('ps5', 'tampa', { title: 'PS5 disc edition', price: 190, ageMs: 60e3, description: "Doesn't turn on.\nSelling for parts.", condition: 'PC_USED_FAIR' });
+  await api(`/api/watches/${w.id}/scan`, { method: 'POST' });
+  const alerted = await events.waitFor('alert', (items) => items.some((l) => l.id === good.id));
+  assert.equal(alerted[0].eval.verdict, 'deal');
+  assert.equal(alerted[0].details.condition, 'Used - like new');
+
+  const push = await waitUntil(() => ntfy.got.find((m) => m.body.title.includes('PS5 disc edition')));
+  assert.equal(push.body.title, '$200 · PS5 disc edition');
+  assert.match(push.body.message, /^\+\$\d+ profit, resells ~\$\d+/);
+  const pages = mock.requests.filter((r) => r.path.startsWith('/marketplace/item/')).map((r) => r.path);
+  assert.ok(pages.includes(`/marketplace/item/${good.id}/`) && pages.includes(`/marketplace/item/${broken.id}/`), 'both full listings were read');
+
+  await waitUntil(async () => (await api('/api/state')).body.listings.find((l) => l.id === broken.id)?.details);
+  let state = (await api('/api/state')).body;
+  const b = state.listings.find((l) => l.id === broken.id);
+  assert.equal(b.pile, 'unsorted');
+  assert.match(b.eval.headline, /for parts/i);
+  assert.equal(ntfy.got.filter((m) => m.body.title.includes('PS5')).length, 1, 'the broken one never alerted');
+
+  // Your thumbs-down overrides the call and counts toward accuracy.
+  await api(`/api/listings/${good.id}`, { method: 'POST', body: { feedback: 'bad' } });
+  await api(`/api/listings/${broken.id}`, { method: 'POST', body: { feedback: 'bad' } });
+  state = (await api('/api/state')).body;
+  assert.deepEqual(state.accuracy, { dealsRight: 0, dealsWrong: 1, missed: 0, rightSkips: 1 });
+  assert.equal(state.listings.find((l) => l.id === good.id).pileOverride, 'unsorted');
+
+  // Raising the profit bar re-sorts what's already found.
+  await api('/api/settings', { method: 'PUT', body: { deals: { minProfit: 500 } } });
+  state = (await api('/api/state')).body;
+  assert.ok(state.listings.every((l) => l.pile === 'unsorted'));
 });
 
 test('API: validation, secrets stay masked, cross-site and foreign-host requests are refused', async (t) => {
