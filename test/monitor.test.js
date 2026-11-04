@@ -116,7 +116,8 @@ test('login walls and rate limits pause every watch, back off, and clear on succ
   assert.equal(t.monitor.status.problem.code, 'LOGIN_REQUIRED');
   assert.ok(w.nextScanAt >= before + 2 * 120e3, 'backs off');
   assert.equal(t.monitor.pickNext(Date.now() + 5 * MIN), null, 'paused during cooldown');
-  t.monitor.scanNow(w.id); // a manual check still goes through
+  t.monitor.queue.push(w.id); // "Check now" still goes through during a pause
+  assert.equal(t.monitor.pickNext(Date.now()).manual, true);
   t.responses.push({ ok: false, code: 'RATE_LIMITED', message: 'slow down', engine: 'fast', listings: [] });
   await t.monitor.scan(w, { manual: true });
   assert.ok(t.monitor.cooldownUntil - Date.now() > 15 * MIN);
