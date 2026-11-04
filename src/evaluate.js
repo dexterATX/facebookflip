@@ -39,6 +39,10 @@ export const DEFAULT_DEAL_RULES = {
   priceGuide: true, // use the built-in price guide for items it knows
 };
 
+// Bump when the way listings are judged changes: saved listings get re-judged
+// once on the next start, so they match what new ones would get.
+export const RULES_VERSION = '2026-11-04.price-guide';
+
 // After this many days the guide's prices count as old: they can still be
 // used, but never alone for an alert.
 export const GUIDE_STALE_DAYS = 180;

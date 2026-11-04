@@ -8,6 +8,7 @@ import path from 'node:path';
 import { MockFacebook } from '../tools/mock-facebook.js';
 import { createApp } from '../src/server.js';
 import { findBrowser } from '../src/facebook/browser.js';
+import { RULES_VERSION } from '../src/evaluate.js';
 
 function fakeNtfy() {
   const got = [];
@@ -258,4 +259,20 @@ test('auto mode: when fast mode gets an empty page, the real browser takes over 
   assert.ok(listings.every((l) => l.creationTime && l.photo), 'came from the GraphQL data, not just the visible cards');
   assert.ok(app.fb.httpPausedUntil > Date.now(), 'fast mode rests for a while');
   assert.ok(mock.requests.some((r) => r.path === '/api/graphql/'));
+});
+
+test('listings saved by an older version are re-judged once with the current rules', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-upgrade-'));
+  const watch = { id: 'w1', name: 'iPhones', query: 'iphone', location: 'tampa', intervalSec: 180, enabled: true, alertMode: 'deals', include: [], exclude: [] };
+  const old = { id: '123', title: 'iPhone 14 Pro 128GB Unlocked', price: 220, priceText: '$220', url: 'https://www.facebook.com/marketplace/item/123/', watchIds: ['w1'], firstSeenAt: Date.now(), pile: 'unsorted', eval: { verdict: 'unsorted', headline: 'Not enough price info yet to judge' } };
+  fs.writeFileSync(path.join(dataDir, 'db.json'), JSON.stringify({ watches: [watch], listings: { 123: old } }));
+  const app = await createApp({ dataDir, fbBase: 'http://127.0.0.1:9', demo: false });
+  t.after(async () => {
+    await app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+  const l = app.store.listings['123'];
+  assert.equal(l.eval.resale.from, 'guide'); // now priced by the price guide
+  assert.equal(l.pile, 'deals');
+  assert.equal(app.store.data.rulesVersion, RULES_VERSION);
 });

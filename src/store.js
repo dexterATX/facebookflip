@@ -149,6 +149,7 @@ export class Store {
       comps: Array.isArray(d.comps) ? d.comps : [],
       aiUsage: d.aiUsage && typeof d.aiUsage === 'object' ? d.aiUsage : null,
       facebook: d.facebook && typeof d.facebook === 'object' ? d.facebook : { connected: false },
+      rulesVersion: typeof d.rulesVersion === 'string' ? d.rulesVersion : null, // deal rules the saved verdicts came from
     };
   }
 

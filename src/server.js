@@ -16,6 +16,7 @@ import { buildSearchUrl, parseMarketplaceUrl } from './facebook/urls.js';
 import { parseCookieInput, hasSession } from './facebook/cookies.js';
 import { JUNK_WORDS } from './deals.js';
 import { guideSummary } from './priceguide.js';
+import { RULES_VERSION } from './evaluate.js';
 import { Hub } from './sse.js';
 import { clamp, toNumber, log, isMainModule } from './util.js';
 
@@ -132,8 +133,12 @@ export async function createApp(overrides = {}) {
   const notifier = new Notifier(store);
   const ai = new AiAdvisor({ store, clientFactory: overrides.aiClientFactory });
   const monitor = new Monitor({ store, fb, notifier, ai, fbBase: config.fbBase, gapMs: config.scanGapMs });
-  // Listings saved by an older version have no pile yet: judge them once.
-  if (Object.values(store.listings).some((l) => !l.pile)) monitor.reevaluate();
+  // Listings judged by an older version (or never): judge them again once.
+  if (store.data.rulesVersion !== RULES_VERSION || Object.values(store.listings).some((l) => !l.pile)) {
+    monitor.reevaluate();
+    store.data.rulesVersion = RULES_VERSION;
+    store.save();
+  }
 
   const publicWatch = (w) => ({ ...w, searchUrl: buildSearchUrl(w, config.fbBase) });
 
