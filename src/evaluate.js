@@ -21,7 +21,7 @@
 //      flag, and at least medium confidence. Unsure means unsorted.
 
 import { norm, titleWords, quantile } from './deals.js';
-import { median, clamp } from './util.js';
+import { clamp } from './util.js';
 import { matchGuide } from './priceguide.js';
 
 // eBay's final value fee for most categories. Published figures in 2026 range
@@ -59,6 +59,8 @@ const raise = (c) => CONF[Math.min(2, CONF.indexOf(c) + 1)];
 const lower = (c) => CONF[Math.max(0, CONF.indexOf(c) - 1)];
 const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const an = (s) => (/^[aeiou]|^x/i.test(s) ? 'an' : 'a'); // "an iPhone", "an Xbox", "a PlayStation"
+// Median of an already sorted list (no copy, no re-sort).
+const sortedMedian = (s) => (s.length ? (s.length % 2 ? s[s.length >> 1] : (s[(s.length >> 1) - 1] + s[s.length >> 1]) / 2) : null);
 const shortDate = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
 // ---------------------------------------------------------------------------
@@ -181,22 +183,79 @@ function guideId(title) {
  */
 export function similarComps(listing, pool, searchWords = []) {
   const skip = new Set(searchWords.flatMap((w) => [...titleWords(w)]));
-  const minus = (set) => new Set([...set].filter((w) => !skip.has(w)));
-  const mine = minus(titleWords(listing.title));
+  const mine = new Set([...titleWords(listing.title)].filter((w) => !skip.has(w)));
   if (!mine.size) return [];
+  const ix = indexOf(pool);
+  // Count shared words only for listings that share at least one.
+  const counts = ix.counts;
+  const touched = [];
+  for (const w of mine) {
+    for (const i of ix.byWord.get(w) || []) {
+      if (counts[i] === 0) touched.push(i);
+      counts[i]++;
+    }
+  }
   const myModel = modelNumber(listing.title);
-  const out = pool.filter((o) => {
-    if (o.id === listing.id || !(o.price > 1)) return false;
-    const theirs = minus(titleWords(o.title));
-    let shared = 0;
-    for (const w of mine) if (theirs.has(w)) shared++;
+  const myGuide = guideId(listing.title);
+  const hits = [];
+  for (const i of touched) {
+    const n = counts[i];
+    counts[i] = 0; // reset for the next listing
     // Two words in common, or at least half of this (short) title's words.
-    if (!(shared >= 2 || (shared >= 1 && shared / mine.size >= 0.5))) return false;
-    const theirModel = myModel && modelNumber(o.title);
-    return !(theirModel && theirModel[0] === myModel[0] && theirModel[1] !== myModel[1]);
+    if (!(n >= 2 || n / mine.size >= 0.5)) continue;
+    const o = ix.items[i];
+    if (o.id === listing.id || !(o.price > 1)) continue;
+    if (myModel) {
+      const theirs = ix.model(i);
+      if (theirs && theirs[0] === myModel[0] && theirs[1] !== myModel[1]) continue;
+    }
+    if (myGuide && guideId(o.title) !== myGuide) continue;
+    hits.push(i);
+  }
+  return hits.sort((a, b) => a - b).map((i) => ix.items[i]);
+}
+
+// A pool of remembered prices, prepared once and reused for every listing
+// judged against it: which listings have each title word, and price summaries
+// per search. Without it, every listing re-read every remembered price.
+const indexes = new WeakMap();
+function indexOf(pool) {
+  let ix = indexes.get(pool);
+  if (ix && ix.n === pool.length) return ix;
+  const byWord = new Map();
+  pool.forEach((o, i) => {
+    for (const w of titleWords(o.title)) {
+      let list = byWord.get(w);
+      if (!list) byWord.set(w, (list = []));
+      list.push(i);
+    }
   });
-  const g = guideId(listing.title);
-  return g ? out.filter((o) => guideId(o.title) === g) : out;
+  const models = new Map();
+  const searches = new Map();
+  ix = {
+    n: pool.length,
+    items: pool,
+    byWord,
+    counts: new Uint16Array(pool.length), // scratch space for counting shared words
+    model(i) {
+      if (!models.has(i)) models.set(i, modelNumber(pool[i].title));
+      return models.get(i);
+    },
+    /** One search's prices, sorted, and where each listing sits in them (or the whole pool's). */
+    search(watchId) {
+      const key = watchId || '*';
+      if (!searches.has(key)) {
+        const rows = pool
+          .filter((o) => o.price > 1 && (!watchId || o.watchIds?.includes(watchId)))
+          .map((o) => [o.id, o.price])
+          .sort((a, b) => a[1] - b[1]);
+        searches.set(key, { prices: rows.map((r) => r[1]), at: new Map(rows.map((r, i) => [r[0], i])) });
+      }
+      return searches.get(key);
+    },
+  };
+  indexes.set(pool, ix);
+  return ix;
 }
 
 /**
@@ -204,34 +263,33 @@ export function similarComps(listing, pool, searchWords = []) {
  * `pool` is [{ id, title, price }] of listings seen recently. With
  * `wholeSearch: false`, only true look-alikes count (not the whole search).
  */
-export function compsEstimate(listing, pool, { searchWords = [], askToSalePct = DEFAULT_DEAL_RULES.askToSalePct, wholeSearch = true } = {}) {
-  const others = pool.filter((o) => o.id !== listing.id && o.price > 1);
-
+export function compsEstimate(listing, pool, { searchWords = [], askToSalePct = DEFAULT_DEAL_RULES.askToSalePct, wholeSearch = true, watchId = null } = {}) {
   let basis = null;
   let kind = null;
-  let similarCount = 0;
-  {
-    const comps = similarComps(listing, others, searchWords);
-    similarCount = comps.length;
-    if (comps.length >= 3) {
-      basis = comps.map((o) => o.price);
-      kind = 'similar';
-    }
+  const comps = similarComps(listing, pool, searchWords);
+  const similarCount = comps.length;
+  if (comps.length >= 3) {
+    basis = comps.map((o) => o.price);
+    kind = 'similar';
   }
-  if (!basis && wholeSearch && others.length >= 8) {
-    // Not enough look-alikes: the whole search only counts if its prices are tightly grouped.
-    const xs = others.map((o) => o.price).sort((a, b) => a - b);
-    const med = median(xs);
+  let sorted = false;
+  if (!basis && wholeSearch) {
+    // Not enough look-alikes: this search's prices count only if they are tightly grouped.
+    const s = indexOf(pool).search(watchId);
+    const own = s.at.get(listing.id);
+    const xs = own === undefined ? s.prices : [...s.prices.slice(0, own), ...s.prices.slice(own + 1)];
+    const med = xs.length >= 8 ? sortedMedian(xs) : 0;
     if (med && (quantile(xs, 0.75) - quantile(xs, 0.25)) / med <= 0.5) {
       basis = xs;
       kind = 'search';
+      sorted = true;
     }
   }
   if (!basis) return { value: null, n: similarCount };
 
-  let xs = [...basis].sort((a, b) => a - b);
+  let xs = sorted ? basis : [...basis].sort((a, b) => a - b);
   if (xs.length >= 10) xs = xs.slice(Math.floor(xs.length * 0.1), Math.ceil(xs.length * 0.9)); // trim outliers
-  const med = median(xs);
+  const med = sortedMedian(xs);
   const q1 = quantile(xs, 0.25);
   const q3 = quantile(xs, 0.75);
   const spread = med ? (q3 - q1) / med : 1;
@@ -283,7 +341,7 @@ export function evaluate(listing, { watch = {}, rules = {}, pool = [], details =
     // A watch-wide price can't fit everything a search turns up (a $45 controller
     // or a PS4 in a PS5 search). If the guide or look-alikes clearly put this
     // item much lower, trust them.
-    const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct });
+    const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct, watchId: watch.id });
     const confirmed = c.value && c.confidence !== 'low';
     if (guide && !guide.volatile && guide.price < watch.resaleValue * 0.6) {
       est = fromGuide('medium');
@@ -306,7 +364,7 @@ export function evaluate(listing, { watch = {}, rules = {}, pool = [], details =
     if (guide && est.from === 'user') est.guide = guideInfo;
   } else {
     // For a model the guide knows, only the same model counts, not the whole search.
-    const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct, wholeSearch: !guide });
+    const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct, wholeSearch: !guide, watchId: watch.id });
     const compsOk = Boolean(c.value) && c.confidence !== 'low';
     const compsBasis = c.value && (c.kind === 'similar' ? `${c.n} similar listings asking ~${money(c.askMedian)}` : `${c.n} listings in this search asking ~${money(c.askMedian)}`);
     if (guide) {

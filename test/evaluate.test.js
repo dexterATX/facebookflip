@@ -169,3 +169,53 @@ test('look-alikes must be the same model, not just similar words', () => {
   assert.deepEqual(similarComps(L('Trek FX 2 hybrid bike', 200), bikes, ['bike']).map((o) => o.id).sort(), ['b0', 'b1', 'b2']);
   assert.deepEqual(modelNumber('PS5 disc edition + 2 controllers'), null); // a count, not a model
 });
+
+// Random but repeatable titles, for the speed and same-answer checks below.
+function randomTitles(n, seed = 7) {
+  const things = ['PS5 disc edition console', 'PS5 DualSense controller', 'iPhone 14 128GB unlocked', 'iPhone 13 mini 128GB', 'Trek FX 2 hybrid bike', 'Trek FX 3 hybrid bike', 'IKEA Kivik 3-seat sofa', 'Gray sectional couch', 'Nintendo Switch OLED', 'Steam Deck OLED 512GB', 'Dewalt 20V drill set', 'Oak dining table'];
+  const extra = ['black', 'white', 'box', 'large', 'small', 'blue', 'set', 'kids', 'used', 'clean', 'firm', 'lot'];
+  let s = seed;
+  const rnd = () => (s = (s * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  return Array.from({ length: n }, (_, i) => ({ id: `r${seed}-${i}`, title: `${pick(things)} ${pick(extra)} ${pick(extra)}`, price: Math.round(20 + rnd() * 600) }));
+}
+
+test('look-alike search gives the same answers as checking every remembered listing', () => {
+  const pool = randomTitles(400, 11);
+  const minus = (set, skip) => new Set([...set].filter((w) => !skip.has(w)));
+  // The plain way: compare with every listing (what the word index replaces).
+  const plain = (listing, words) => {
+    const skip = new Set(words.flatMap((w) => [...titleWords(w)]));
+    const mine = minus(titleWords(listing.title), skip);
+    if (!mine.size) return [];
+    const my = modelNumber(listing.title);
+    return pool.filter((o) => {
+      if (o.id === listing.id || !(o.price > 1)) return false;
+      const theirs = minus(titleWords(o.title), skip);
+      let shared = 0;
+      for (const w of mine) if (theirs.has(w)) shared++;
+      if (!(shared >= 2 || shared / mine.size >= 0.5)) return false;
+      const m = my && modelNumber(o.title);
+      return !(m && m[0] === my[0] && m[1] !== my[1]);
+    });
+  };
+  for (const l of randomTitles(60, 23)) {
+    for (const words of [[], ['bike'], ['ps5']]) {
+      const fast = similarComps(l, pool, words).map((o) => o.id);
+      // Items the price guide knows are narrowed to the exact model on top of that.
+      const want = plain(l, words).map((o) => o.id);
+      if (/ps5|iphone|switch|steam deck/i.test(l.title)) assert.ok(fast.every((id) => want.includes(id)), l.title);
+      else assert.deepEqual(fast, want, l.title);
+    }
+  }
+});
+
+test('re-checking lots of listings stays fast', () => {
+  // A full week of data: before the word index, this took about 70 seconds.
+  const pool = randomTitles(6000, 5);
+  const listings = randomTitles(1500, 9);
+  const t0 = Date.now();
+  for (const l of listings) evaluate(l, { watch: { ...watch, query: 'stuff' }, pool });
+  const ms = Date.now() - t0;
+  assert.ok(ms < 8000, `took ${ms} ms`);
+});

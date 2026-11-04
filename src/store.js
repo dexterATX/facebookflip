@@ -367,9 +367,9 @@ export class Store {
   addComp(l, { junk = false, now = Date.now() } = {}) {
     if (!(l.price > 1)) return;
     const i = this.data.comps.findIndex((c) => c.id === l.id);
-    const entry = { id: l.id, title: l.title, price: l.price, at: now, junk };
+    const entry = { id: l.id, title: l.title, price: l.price, at: now, junk, watchIds: [...(l.watchIds || [])] };
     if (i === -1) this.data.comps.push(entry);
-    else this.data.comps[i] = { ...this.data.comps[i], price: l.price, junk };
+    else this.data.comps[i] = { ...this.data.comps[i], price: l.price, junk, watchIds: entry.watchIds };
   }
 
   /** Prices seen in the last 30 days, for the "what does it resell for" estimate. */
