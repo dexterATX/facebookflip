@@ -304,17 +304,24 @@ export async function createApp(overrides = {}) {
       if (!['localhost', '127.0.0.1', '::1'].includes(host)) throw new HttpError(403, 'Forbidden host');
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      const origin = req.headers.origin;
-      if (origin && origin !== 'null') {
-        let ok = false;
-        try {
-          ok = new URL(origin).host === req.headers.host;
-        } catch {
-          ok = false;
+      // Browsers label every request with where it came from (Sec-Fetch-Site),
+      // and a web page cannot fake it. Trust that when present: it keeps working
+      // behind proxies that rewrite the Host header. Otherwise compare Origin.
+      const site = req.headers['sec-fetch-site'];
+      if (site) {
+        if (site !== 'same-origin' && site !== 'none') throw new HttpError(403, 'Cross-site request blocked');
+      } else {
+        const origin = req.headers.origin;
+        if (origin && origin !== 'null') {
+          let ok = false;
+          try {
+            ok = new URL(origin).host === req.headers.host;
+          } catch {
+            ok = false;
+          }
+          if (!ok) throw new HttpError(403, 'Cross-site request blocked');
         }
-        if (!ok) throw new HttpError(403, 'Cross-site request blocked');
       }
-      if (req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'Cross-site request blocked');
     }
     if (config.password) {
       const m = String(req.headers.authorization || '').match(/^Basic\s+(.+)$/i);

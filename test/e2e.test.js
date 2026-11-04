@@ -169,6 +169,13 @@ test('API: validation, secrets stay masked, cross-site and foreign-host requests
 
   const cross = await api('/api/settings', { method: 'PUT', body: { engine: 'browser' }, headers: { origin: 'https://evil.example' } });
   assert.equal(cross.status, 403);
+  for (const site of ['cross-site', 'same-site']) {
+    const r = await api('/api/settings', { method: 'PUT', body: { engine: 'browser' }, headers: { 'sec-fetch-site': site } });
+    assert.equal(r.status, 403, site);
+  }
+  // Behind a preview/reverse proxy the Origin no longer matches Host, but the browser still says same-origin.
+  const proxied = await api('/api/settings', { method: 'PUT', body: { engine: 'fast' }, headers: { 'sec-fetch-site': 'same-origin', origin: 'https://preview.example' } });
+  assert.equal(proxied.status, 200);
 
   const foreignHost = await new Promise((resolve) => {
     const u = new URL(base);
