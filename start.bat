@@ -5,11 +5,10 @@ cd /d "%~dp0"
 where node >nul 2>nul
 if errorlevel 1 goto :nonode
 
-if not exist node_modules (
-  echo Installing for the first time, this takes a minute...
-  call npm install --no-fund --no-audit
-  if errorlevel 1 goto :installfailed
-)
+if not exist node_modules echo Installing for the first time, this takes a minute...
+rem Quick when nothing changed; picks up new libraries after an update.
+call npm install --no-fund --no-audit --prefer-offline --loglevel=error
+if errorlevel 1 goto :installfailed
 
 set OPEN=1
 node src\server.js

@@ -12,8 +12,9 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -d node_modules ]; then
-  echo "Installing for the first time, this takes a minute..."
+# Install on the first run, and again after an update changes the app's libraries.
+if [ ! -d node_modules ] || [ package.json -nt node_modules/.package-lock.json ]; then
+  echo "Installing (first run or after an update), this takes a minute..."
   npm install --no-fund --no-audit || { echo "Installing failed. Check your internet connection."; read -r -p "Press Enter to close."; exit 1; }
 fi
 
