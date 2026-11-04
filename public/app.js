@@ -313,6 +313,13 @@ function renderSideFoot() {
   if (state.watches.length) {
     const lvl = cph <= 60 ? ['gentle', 'Gentle'] : cph <= 120 ? ['moderate', 'Moderate'] : ['heavy', 'Heavy'];
     parts.push(`<div class="meter" title="How often FlipRadar loads Facebook in total. Gentle is safest; heavy raises the chance Facebook slows you down.">${icon('gauge')}<span><b>${cph}</b> checks / hour</span><span class="lvl ${lvl[0]}">${lvl[1]}</span></div>`);
+    const sp = state.status?.speed;
+    if (sp && (sp.foundAfterMin !== null || sp.checkMs !== null)) {
+      const found = sp.foundAfterMin === null ? '' : sp.foundAfterMin < 1 ? 'New posts found in <b>under a minute</b>' : `New posts found <b>~${Math.round(sp.foundAfterMin)} min</b> after posting`;
+      const secs = sp.checkMs === null ? '' : sp.checkMs < 1000 ? 'under 1 s' : `${(sp.checkMs / 1000).toFixed(1)} s`;
+      const check = sp.checkMs === null ? '' : `checks take <b>${secs}</b>${sp.engine === 'browser' ? ' (browser)' : ''}`;
+      parts.push(`<div class="meter speed" title="Typical over the last day. To hear about posts sooner, pick a shorter &quot;Check every&quot; on a watch.">${icon('zap')}<span>${[found, check].filter(Boolean).join(' · ')}</span></div>`);
+    }
   }
   const on = notifyOn();
   if (!on.length) parts.push(`<button class="setup-chip" data-act="settings">${icon('phone')}<span><b>Get alerts on your phone</b><br>Free, takes 2 minutes.</span></button>`);

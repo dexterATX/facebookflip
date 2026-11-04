@@ -264,3 +264,22 @@ test('store survives a corrupt file and writes atomically', () => {
   assert.equal(new Store(file).watches.length, 1);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('speed readout: how long after posting new listings are found, and check times', () => {
+  const t = setup();
+  const now = Date.now();
+  const add = (id, postedMinAgo, seenMinAgo, extra = {}) =>
+    (t.store.listings[id] = { id, title: id, creationTime: now - postedMinAgo * MIN, firstSeenAt: now - seenMinAgo * MIN, ...extra });
+  assert.equal(t.monitor.speed(now).foundAfterMin, null, 'not enough to say yet');
+  [3, 5, 2, 4, 6].forEach((lag, i) => add(`n${i}`, 30 + lag, 30)); // found 2-6 minutes after posting
+  add('old', 3000, 30); // re-listed weeks-old post: not counted
+  add('base', 40, 30, { baseline: true }); // already up when the watch started: not counted
+  for (const ms of [900, 1500, 1200]) t.monitor.addLog({ code: 'OK', ms, engine: 'fast' });
+  const sp = t.monitor.speed(now);
+  assert.equal(sp.foundAfterMin, 4);
+  assert.equal(sp.samples, 5);
+  assert.equal(sp.checkMs, 1200);
+  assert.equal(sp.engine, 'fast');
+  assert.equal(t.monitor.status.speed.foundAfterMin, 4);
+  t.cleanup();
+});

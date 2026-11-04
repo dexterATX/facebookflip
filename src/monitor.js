@@ -101,6 +101,27 @@ export class Monitor extends EventEmitter {
       checksPerHour: this.checksPerHour(),
       problem: this.problem,
       checkingDeals: this.deepQueue.length + (this.deepRunning ? 1 : 0),
+      speed: this.speed(now),
+    };
+  }
+
+  /**
+   * How quickly new listings are being found, over the last day: minutes from
+   * posting to FlipRadar seeing it (median), and how long a check takes.
+   */
+  speed(now = Date.now()) {
+    const found = [];
+    for (const l of Object.values(this.store.listings)) {
+      if (l.baseline || !l.creationTime || !l.firstSeenAt || now - l.firstSeenAt > 86400e3) continue;
+      const min = (l.firstSeenAt - l.creationTime) / 60000;
+      if (min >= 0 && min <= 180) found.push(min); // older ones were re-listed, not new
+    }
+    const checks = this.logs.filter((x) => x.code === 'OK' && x.ms > 0).slice(-30);
+    return {
+      foundAfterMin: found.length >= 5 ? Math.round(median(found) * 10) / 10 : null,
+      samples: found.length,
+      checkMs: checks.length ? Math.round(median(checks.map((x) => x.ms))) : null,
+      engine: checks.length ? checks[checks.length - 1].engine : null,
     };
   }
 
