@@ -75,6 +75,7 @@ const state = {
   accuracy: null,
   ai: null,
   priceGuide: null,
+  dealsLogged: 0,
   limit: PAGE,
   fresh: new Map(), // id -> arrival time (for the "NEW" glow)
   pendingScan: new Map(), // watch id -> when 'Check now' was pressed
@@ -407,6 +408,15 @@ function renderTabs() {
       `<span class="acc" title="From your thumbs up / down">${icon('check')}Your feedback: ${calls ? `<b>${a.dealsRight} of ${calls}</b> deals were right` : 'no deals rated yet'}${a.missed ? ` · <b>${a.missed}</b> good one${a.missed === 1 ? ' was' : 's were'} in Unsorted` : ''}</span>`,
     );
   }
+  if (state.view.tab === 'saved' || state.view.tab === 'deals') {
+    const n = state.dealsLogged;
+    const sheet = `<a class="btn btn-xs btn-ghost" href="/api/deals.csv" download>${icon('download')}Deals spreadsheet${n ? ` (${n})` : ''}</a>`;
+    parts.push(
+      state.view.tab === 'saved'
+        ? `<span class="acc">${icon('star')}Every deal is saved here automatically, plus anything you star. They stay until you un-star them, even after they're gone from Facebook.</span>${sheet}`
+        : sheet,
+    );
+  }
   note.innerHTML = parts.join('');
   note.hidden = !parts.length;
 }
@@ -695,6 +705,10 @@ function connectEvents() {
     state.accuracy = a;
     renderTabs();
   });
+  on('dealsLogged', (n) => {
+    state.dealsLogged = n;
+    renderTabs();
+  });
   on('ai', (info) => {
     state.ai = info;
     if (state.modal === 'settings') renderAiBox();
@@ -715,6 +729,7 @@ async function loadState() {
   state.junkWords = s.junkWords || [];
   state.intervals = s.intervals || state.intervals;
   state.priceGuide = s.priceGuide || null;
+  state.dealsLogged = s.dealsLogged || 0;
   state.listings = new Map(s.listings.map((l) => [l.id, l]));
   state.exhausted = s.listings.length < 400;
   renderAll();

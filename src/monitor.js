@@ -58,6 +58,7 @@ export class Monitor extends EventEmitter {
     this.timer = null;
     this.deepQueue = [];
     this.deepRunning = false;
+    this.deepCurrent = null; // id of the listing getting a closer look right now
     this.detailTimes = [];
   }
 
@@ -187,6 +188,20 @@ export class Monitor extends EventEmitter {
     return l.eval;
   }
 
+  /**
+   * Every deal is kept: saved (so the cleanup never deletes it) and added to
+   * the deals spreadsheet. A deal waiting for its closer look is kept only
+   * after it passes, so one the full listing rules out is never saved. Runs
+   * once per listing: if you un-star it, it stays un-starred.
+   */
+  keepIfDeal(l, watch = this.watchFor(l), { afterCloserLook = false } = {}) {
+    if (pileOf(l) !== 'deals' || l.hidden || l.dealSavedAt) return false;
+    if (!afterCloserLook && (this.deepCurrent === l.id || this.deepQueue.some((j) => j.id === l.id))) return false;
+    const added = this.store.saveDeal(l, { watch: watch?.name || '' });
+    if (added) this.emit('dealsLogged', this.store.dealsLogged());
+    return true;
+  }
+
   /** Re-judge stored listings after rules or a watch change (no network). */
   reevaluate(watchId = null) {
     const pool = this.store.compsPool();
@@ -194,6 +209,7 @@ export class Monitor extends EventEmitter {
     for (const l of Object.values(this.store.listings)) {
       if (watchId && !(l.watchIds || []).includes(watchId)) continue;
       this.judge(l, this.watchFor(l), pool);
+      this.keepIfDeal(l);
       n++;
     }
     if (n) this.store.save();
@@ -217,7 +233,9 @@ export class Monitor extends EventEmitter {
     try {
       while (this.deepQueue.length && !this.stopped) {
         const job = this.deepQueue.shift();
+        this.deepCurrent = job.id;
         await this.deepCheck(job).catch((e) => log.warn(`Closer look failed: ${e.message}`));
+        this.deepCurrent = null;
       }
     } finally {
       this.deepRunning = false;
@@ -276,6 +294,7 @@ export class Monitor extends EventEmitter {
       }
     }
     l.deepCheckedAt = Date.now();
+    this.keepIfDeal(l, watch, { afterCloserLook: true });
     this.store.save();
     this.emit('updates', [l]);
     if (job.alertEligible && pileOf(l) === 'deals' && !l.alertedAt) this.alert(watch, [l], []);
@@ -406,6 +425,8 @@ export class Monitor extends EventEmitter {
         freshNow.push(l);
       }
     }
+    // Keep every deal. (Ones getting a closer look are kept when it passes.)
+    for (const l of [...fresh, ...drops]) this.keepIfDeal(l, watch);
     const dropAlerts =
       watch.mute || watch.alertDrops === false ? [] : drops.filter((l) => watch.alertMode === 'all' || pileOf(l) === 'deals');
 

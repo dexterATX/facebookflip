@@ -276,3 +276,41 @@ test('listings saved by an older version are re-judged once with the current rul
   assert.equal(l.pile, 'deals');
   assert.equal(app.store.data.rulesVersion, RULES_VERSION);
 });
+
+test('saved deals: download as a spreadsheet, thumbs and Clear respect them', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-deals-'));
+  const watch = { id: 'w1', name: 'iPhones', query: 'iphone', location: 'tampa', intervalSec: 180, enabled: true, alertMode: 'deals', include: [], exclude: [] };
+  const item = (id, title, price) => ({ id, title, price, priceText: `$${price}`, url: `https://www.facebook.com/marketplace/item/${id}/`, watchIds: ['w1'], firstSeenAt: Date.now(), pile: 'unsorted' });
+  const listings = { 1: item('1', 'iPhone 14 Pro 128GB Unlocked', 220), 2: item('2', 'iPhone 14 Pro 128GB', 330) };
+  fs.writeFileSync(path.join(dataDir, 'db.json'), JSON.stringify({ watches: [watch], listings }));
+  const app = await createApp({ dataDir, fbBase: 'http://127.0.0.1:9', demo: false });
+  const addr = await app.listen(0, '127.0.0.1');
+  const base = `http://127.0.0.1:${addr.port}`;
+  t.after(async () => {
+    await app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+  const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json());
+
+  // The deal found before this version is saved on start; the fair price isn't.
+  assert.equal(app.store.listings['1'].saved, true);
+  assert.ok(!app.store.listings['2'].saved);
+  const state = await fetch(`${base}/api/state`).then((r) => r.json());
+  assert.equal(state.dealsLogged, 1);
+
+  const res = await fetch(`${base}/api/deals.csv`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /^text\/csv/);
+  assert.match(res.headers.get('content-disposition'), /attachment; filename="flipradar-deals-\d{4}-\d{2}-\d{2}\.csv"/);
+  assert.match(await res.text(), /iPhone 14 Pro 128GB Unlocked,220,347,117,34%/);
+
+  // Thumbs-down: not a deal after all, so it's no longer kept. Thumbs-up keeps it.
+  assert.equal((await post('/api/listings/1', { feedback: 'bad' })).saved, false);
+  assert.equal((await post('/api/listings/2', { feedback: 'good' })).saved, true);
+  // Clear hides everything except what's saved.
+  await post('/api/listings-clear', {});
+  assert.ok(!app.store.listings['2'].hidden);
+  assert.equal(app.store.listings['1'].hidden, true);
+  const after = await fetch(`${base}/api/deals.csv`).then((r) => r.text());
+  assert.equal(after.trim().split('\n').length, 3, 'header + the two deals, no duplicates');
+});

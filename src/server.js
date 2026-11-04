@@ -139,10 +139,14 @@ export async function createApp(overrides = {}) {
     store.data.rulesVersion = RULES_VERSION;
     store.save();
   }
+  // Deals from before deals were saved automatically, or whose closer look a
+  // restart cut short: keep them now.
+  for (const l of Object.values(store.listings)) monitor.keepIfDeal(l);
 
   const publicWatch = (w) => ({ ...w, searchUrl: buildSearchUrl(w, config.fbBase) });
 
   monitor.on('listings', (items) => hub.send('listings', items));
+  monitor.on('dealsLogged', (n) => hub.send('dealsLogged', n));
   monitor.on('updates', (items) => hub.send('updates', items));
   monitor.on('alert', (items) => hub.send('alert', items));
   monitor.on('watch', (w) => hub.send('watch', publicWatch(w)));
@@ -200,6 +204,7 @@ export async function createApp(overrides = {}) {
     junkWords: JUNK_WORDS,
     intervals: INTERVALS,
     priceGuide: guideSummary(),
+    dealsLogged: store.dealsLogged(),
   }));
 
   add('GET', '/api/listings', async ({ query }) => ({
@@ -247,12 +252,21 @@ export async function createApp(overrides = {}) {
   add('POST', '/api/listings/:id', async ({ params, body }) => {
     const l = store.listings[params.id];
     if (!l) throw new HttpError(404, 'Listing not found.');
-    if ('saved' in body) l.saved = Boolean(body.saved);
-    if ('hidden' in body) l.hidden = Boolean(body.hidden);
+    if ('saved' in body) {
+      // A star you set is yours: never trimmed. Un-starring a saved deal sticks.
+      l.saved = Boolean(body.saved);
+      l.autoSaved = false;
+    }
+    if ('hidden' in body) {
+      l.hidden = Boolean(body.hidden);
+      if (l.hidden && l.autoSaved) l.saved = l.autoSaved = false;
+    }
     if ('feedback' in body) {
-      // Your call wins: thumbs-up moves it to Deals, thumbs-down to Unsorted.
+      // Your call wins: thumbs-up moves it to Deals (and saves it), thumbs-down to Unsorted.
       l.feedback = body.feedback === 'good' || body.feedback === 'bad' ? body.feedback : null;
       l.pileOverride = l.feedback === 'good' ? 'deals' : l.feedback === 'bad' ? 'unsorted' : null;
+      if (l.feedback === 'good' && store.saveDeal(l, { watch: store.getWatch((l.watchIds || [])[0])?.name || '' })) hub.send('dealsLogged', store.dealsLogged());
+      else if (l.feedback === 'bad' && l.autoSaved) l.saved = l.autoSaved = false;
       hub.send('accuracy', accuracy());
     }
     store.save();
@@ -480,6 +494,16 @@ export async function createApp(overrides = {}) {
       if (url.pathname === '/api/events') {
         hub.add(req, res);
         return;
+      }
+      if (url.pathname === '/api/deals.csv' && req.method === 'GET') {
+        const day = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="flipradar-deals-${day}.csv"`,
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        });
+        return res.end(store.dealsCsv());
       }
       if (url.pathname.startsWith('/api/')) {
         const route = routes.find((r) => r.method === req.method && r.re.test(url.pathname));

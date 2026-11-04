@@ -21,6 +21,7 @@ FlipRadar watches the Marketplace searches you care about, newest first. Every n
 - **Deal checking.** Every listing gets an estimated resale price, profit and margin, plus a plain reason. Possible deals get a closer look at the full listing before you're alerted. See [How it decides what's a deal](#how-it-decides-whats-a-deal).
 - **Built-in price guide.** Recent used sale prices for 35 popular flips (PlayStation, Xbox, Switch, Steam Deck, Meta Quest, iPhone 13–16, Galaxy S24 Ultra, iPad, AirPods Max), each with its source and date. Those items can be judged from the very first listing, with no price history needed.
 - **Two piles, nothing lost.** **Deals** alert you. **Unsorted** keeps everything else with its reason, like "only +$12 profit" or "for parts (doesn't turn on)". 👍/👎 any listing to move it, and FlipRadar keeps score of how often it was right.
+- **Good deals are saved for you.** Every deal goes to the **Saved** tab automatically and stays until you un-star it, even after it's gone from Facebook. (The app keeps your newest 1,000 deals; anything you star yourself is never trimmed.) Each deal is also written to a spreadsheet, `data/deals.csv`, that keeps every one: price, what it resells for, profit, where the price came from, and the link. Download it from the Deals or Saved tab and open it in Excel, Google Sheets or LibreOffice.
 - **Optional AI second opinion.** With your own Anthropic API key, Claude identifies the exact item, reads the condition and photo, and estimates what it really sells for. It only checks possible deals, with a daily cap.
 - **Gentle on Facebook.** It runs one check at a time with randomized timing, backs off automatically, and pauses everything if Facebook pushes back instead of hammering it. Optional quiet hours overnight.
 - **Clean dashboard.** A live feed with photos, Deals / Unsorted / Saved tabs, a "why?" breakdown on every listing, and an activity log. It works on your phone too.
@@ -164,7 +165,7 @@ While the dashboard is open, it also plays a sound and can show desktop notifica
 | `PORT` | `3000` | Dashboard port. |
 | `HOST` | `127.0.0.1` | Use `0.0.0.0` to allow other devices on your network (set `PASSWORD` too). |
 | `PASSWORD` | none | Password-protect the dashboard. |
-| `DATA_DIR` | `./data` | Where settings, listings and the browser login are stored. |
+| `DATA_DIR` | `./data` | Where settings, listings, your deals spreadsheet (`deals.csv`) and the browser login are stored. |
 | `BROWSER_PATH` | auto | Full path to Chrome/Edge/Chromium if it isn't found automatically. |
 | `FB_USER_AGENT` | recent Chrome | Browser identity string used in fast mode. |
 
@@ -195,7 +196,7 @@ src/
   ai.js              optional AI second opinion (Claude)
   deals.js           your filters and text helpers
   notify.js          ntfy, Discord, Telegram
-  store.js           saves everything to data/db.json
+  store.js           saves everything to data/db.json; deals also go to data/deals.csv
   facebook/          links, page reading, fast mode, browser mode
 public/              the dashboard (plain HTML, CSS and JavaScript)
 tools/               pretend Marketplace, demo, accuracy report

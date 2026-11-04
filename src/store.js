@@ -26,6 +26,9 @@ export const DEFAULT_SETTINGS = {
 export const INTERVALS = [60, 120, 180, 300, 600, 900, 1800, 3600];
 const KEEP_MS = 7 * 86400e3;
 const MAX_LISTINGS = 3000;
+// Deals are saved automatically. The newest this many stay in the app; every
+// one of them is also in data/deals.csv, which is never trimmed.
+export const MAX_SAVED_DEALS = 1000;
 // Price memory for comparisons outlives the listings themselves.
 const COMPS_KEEP_MS = 45 * 86400e3;
 const COMPS_WINDOW_MS = 30 * 86400e3;
@@ -114,9 +117,54 @@ export function cleanWatchInput(body, existing = null) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// The deals spreadsheet: one row per deal, appended as deals are found.
+
+const DEAL_COLUMNS = ['Saved at', 'Title', 'Price', 'Resells for', 'Profit', 'Margin', 'Confidence', 'Price based on', 'Warnings', 'Location', 'Posted', 'Search', 'Link'];
+
+const localTime = (ms) => {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/** One CSV cell. Text from sellers can't start a spreadsheet formula. */
+export function csvCell(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+  let t = String(v).replace(/\r?\n|\r/g, ' ');
+  if (/^[=+\-@\t]/.test(t)) t = `'${t}`;
+  return /[",\n]/.test(t) || t !== t.trim() ? `"${t.replace(/"/g, '""')}"` : t;
+}
+
+export function dealRow(l, watchName = '', savedAt = Date.now()) {
+  const e = l.eval || {};
+  return [
+    localTime(savedAt),
+    l.title,
+    l.price ?? null,
+    e.resale?.value ?? null,
+    typeof e.profit === 'number' ? e.profit : null,
+    typeof e.margin === 'number' ? `${Math.round(e.margin * 100)}%` : '',
+    e.confidence || '',
+    e.resale?.basis || '',
+    (e.flags || []).filter((f) => f.kind === 'warn').map((f) => f.text).join('; '),
+    l.locationText || [l.city, l.state].filter(Boolean).join(', '),
+    localTime(l.creationTime),
+    watchName,
+    l.url || '',
+  ]
+    .map(csvCell)
+    .join(',');
+}
+
+export const dealCsvHeader = () => DEAL_COLUMNS.join(',');
+
 export class Store {
   constructor(file) {
     this.file = file;
+    this.dealsFile = path.join(path.dirname(file), 'deals.csv');
     this.timer = null;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     this.data = this.load();
@@ -250,6 +298,57 @@ export class Store {
     return true;
   }
 
+  /**
+   * Keep a deal: it goes to Saved (unless you starred it already) and gets a
+   * row in data/deals.csv (once per listing, however often it's saved).
+   * Returns true when it added a row.
+   */
+  saveDeal(l, { watch = '', now = Date.now() } = {}) {
+    if (!l.saved) {
+      l.saved = true;
+      l.autoSaved = true;
+    }
+    const isNew = !l.dealSavedAt;
+    if (isNew) {
+      l.dealSavedAt = now;
+      this.appendDealRow(dealRow(l, watch, now));
+    }
+    this.save();
+    return isNew;
+  }
+
+  appendDealRow(row) {
+    try {
+      // The byte-order mark makes Excel read accents and emoji correctly.
+      if (!fs.existsSync(this.dealsFile)) fs.writeFileSync(this.dealsFile, `﻿${dealCsvHeader()}\n`);
+      fs.appendFileSync(this.dealsFile, `${row}\n`);
+      if (this.dealCount !== undefined) this.dealCount++;
+    } catch (e) {
+      log.warn(`Could not add the deal to ${this.dealsFile}: ${e.message}`);
+    }
+  }
+
+  /** How many deals the spreadsheet holds. */
+  dealsLogged() {
+    if (this.dealCount === undefined) {
+      try {
+        this.dealCount = Math.max(0, fs.readFileSync(this.dealsFile, 'utf8').split('\n').filter(Boolean).length - 1);
+      } catch {
+        this.dealCount = 0;
+      }
+    }
+    return this.dealCount;
+  }
+
+  /** The deals spreadsheet, or just its header if no deals yet. */
+  dealsCsv() {
+    try {
+      return fs.readFileSync(this.dealsFile, 'utf8');
+    } catch {
+      return `﻿${dealCsvHeader()}\n`;
+    }
+  }
+
   /** Newest first. Always includes saved listings so the Saved tab is complete. */
   recent({ limit = 400, before = Infinity } = {}) {
     const all = Object.values(this.data.listings).filter((l) => !l.hidden);
@@ -288,6 +387,15 @@ export class Store {
         delete this.data.listings[l.id];
         removed++;
       }
+    }
+    // Saved deals stay until you un-star them, up to the newest MAX_SAVED_DEALS.
+    // (Older ones are still in data/deals.csv.) Your own stars are never trimmed.
+    const autoSaved = Object.values(this.data.listings)
+      .filter((l) => l.saved && l.autoSaved)
+      .sort((a, b) => (b.dealSavedAt || 0) - (a.dealSavedAt || 0));
+    for (const l of autoSaved.slice(MAX_SAVED_DEALS)) {
+      delete this.data.listings[l.id];
+      removed++;
     }
     const left = Object.values(this.data.listings).filter((l) => !l.saved);
     if (left.length > MAX_LISTINGS) {
