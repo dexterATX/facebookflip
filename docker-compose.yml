@@ -1,0 +1,16 @@
+services:
+  flipradar:
+    build: .
+    container_name: flipradar
+    restart: unless-stopped
+    init: true
+    # Only this computer can open the dashboard. To use it from your phone on
+    # the same Wi-Fi, change this to "3000:3000" AND set a PASSWORD below.
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - TZ=America/New_York # your time zone, used for quiet hours
+      # - PASSWORD=pick-a-password
+    volumes:
+      - ./data:/data
+    shm_size: "1gb" # Chrome needs shared memory in browser mode

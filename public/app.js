@@ -1,0 +1,1302 @@
+// FlipRadar dashboard. Plain JavaScript, no build step.
+
+// ---------------------------------------------------------------- helpers
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const safeUrl = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : '');
+const icon = (name, cls = '') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const sortKey = (l) => l.creationTime || l.firstSeenAt || 0;
+const DEALS = ['steal', 'great', 'good'];
+const isDeal = (l) => Boolean(l.deal && DEALS.includes(l.deal.label));
+const PAGE = 120;
+const SECRET = '••••••••';
+const narrow = window.matchMedia('(max-width: 600px)');
+
+function ago(ts, now = Date.now()) {
+  const s = Math.max(0, Math.round((now - ts) / 1000));
+  if (s < 45) return 'now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+function agoLong(ts, now = Date.now()) {
+  const m = Math.max(0, Math.round((now - ts) / 60000));
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h} hr ago` : `${Math.round(h / 24)} days ago`;
+}
+function countdown(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 3600) return `${Math.round(s / 3600)}h`;
+  if (s >= 600) return `${Math.round(s / 60)}m`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+const money = (n) => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+const priceLabel = (l) => l.priceText || (l.price === 0 ? 'Free' : l.price != null ? money(l.price) : '—');
+const intervalLabel = (sec) => (sec >= 3600 ? `${sec / 3600} hr` : `${Math.round(sec / 60)} min`);
+const debounce = (fn, ms) => {
+  let t;
+  return (...a) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...a), ms);
+  };
+};
+
+const SHORT = {
+  LOGIN_REQUIRED: 'Facebook wants a login',
+  CHECKPOINT: 'Facebook security check needed',
+  RATE_LIMITED: 'Facebook asked us to slow down',
+  BAD_LOCATION: 'Location not recognized',
+  INELIGIBLE: 'Account cannot use Marketplace',
+  EMPTY: 'Empty page from Facebook, retrying',
+  HTTP_ERROR: 'Facebook error page',
+  NETWORK: 'No connection to Facebook',
+  NO_BROWSER: 'No browser found',
+  BROWSER_ERROR: 'Background browser problem',
+};
+
+// ---------------------------------------------------------------- state
+const state = {
+  settings: null,
+  watches: [],
+  listings: new Map(),
+  status: null,
+  facebook: null,
+  logs: [],
+  notifyErrors: {},
+  demo: false,
+  junkWords: [],
+  intervals: [60, 120, 180, 300, 600, 900, 1800, 3600],
+  view: { tab: 'all', watchId: null, q: '' },
+  limit: PAGE,
+  fresh: new Map(), // id -> arrival time (for the "NEW" glow)
+  pendingScan: new Map(), // watch id -> when 'Check now' was pressed
+  unread: 0,
+  online: false,
+  modal: null,
+  exhausted: false,
+  prefs: loadPrefs(),
+};
+
+function loadPrefs() {
+  const d = { sound: true, desktop: false, demoNoteHidden: false };
+  try {
+    return { ...d, ...JSON.parse(localStorage.getItem('flipradar.prefs') || '{}') };
+  } catch {
+    return d;
+  }
+}
+function savePrefs() {
+  try {
+    localStorage.setItem('flipradar.prefs', JSON.stringify(state.prefs));
+  } catch {
+    /* private mode */
+  }
+}
+
+async function api(path, { method = 'GET', body } = {}) {
+  const res = await fetch(path, {
+    method,
+    headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    /* empty */
+  }
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+// ---------------------------------------------------------------- toasts
+function toast(text, kind = 'ok', { action, onAction, ms = 4200 } = {}) {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.innerHTML = `${icon(kind === 'ok' ? 'check' : 'alert')}<span>${esc(text)}</span>${action ? `<button class="btn btn-xs btn-ghost">${esc(action)}</button>` : ''}`;
+  if (action) {
+    el.querySelector('button').addEventListener('click', () => {
+      onAction?.();
+      el.remove();
+    });
+  }
+  $('#toasts').append(el);
+  setTimeout(() => el.remove(), ms);
+}
+
+// ---------------------------------------------------------------- data helpers
+const watchById = (id) => state.watches.find((w) => w.id === id);
+
+function visibleListings() {
+  const { tab, watchId, q } = state.view;
+  const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const out = [];
+  for (const l of state.listings.values()) {
+    if (l.hidden) continue;
+    if (tab === 'saved' && !l.saved) continue;
+    if (tab === 'deals' && !isDeal(l) && l.prevPrice == null) continue;
+    if (watchId && !l.watchIds?.includes(watchId)) continue;
+    if (terms.length) {
+      const t = `${l.title} ${l.locationText || ''}`.toLowerCase();
+      if (!terms.every((x) => t.includes(x))) continue;
+    }
+    out.push(l);
+  }
+  return out.sort((a, b) => sortKey(b) - sortKey(a));
+}
+
+function counts() {
+  let all = 0;
+  let deals = 0;
+  let saved = 0;
+  for (const l of state.listings.values()) {
+    if (l.hidden) continue;
+    if (state.view.watchId && !l.watchIds?.includes(state.view.watchId)) continue;
+    all++;
+    if (isDeal(l) || l.prevPrice != null) deals++;
+    if (l.saved) saved++;
+  }
+  return { all, deals, saved };
+}
+
+const notifyOn = () => {
+  const n = state.settings?.notify;
+  return n ? ['ntfy', 'discord', 'telegram'].filter((k) => n[k].enabled) : [];
+};
+
+// ---------------------------------------------------------------- header + banner
+function renderLive() {
+  const el = $('#live');
+  const s = state.status;
+  const now = Date.now();
+  let cls = 'idle';
+  let text = 'Connecting…';
+  if (!state.online) {
+    cls = 'offline';
+    text = 'Reconnecting to FlipRadar…';
+  } else if (s) {
+    if (s.scanning) {
+      cls = 'scanning';
+      text = `Checking “${watchById(s.scanning)?.name || '…'}”`;
+    } else if (s.state === 'idle') {
+      text = state.watches.length ? 'All watches paused' : 'Add a watch to start';
+    } else if (s.state === 'cooldown') {
+      cls = 'cooldown';
+      text = `Paused · resumes in ${countdown((s.cooldownUntil || now) - now)}`;
+    } else if (s.state === 'quiet') {
+      cls = 'quiet';
+      text = 'Quiet hours · alerts paused';
+    } else {
+      cls = 'running';
+      text = s.nextScanAt ? `Live · next check ${s.nextScanAt - now > 1500 ? `in ${countdown(s.nextScanAt - now)}` : 'now'}` : 'Live';
+    }
+  }
+  if (narrow.matches && state.online && s) {
+    // Short version for phones.
+    if (cls === 'running' && s.nextScanAt) text = `Live · ${s.nextScanAt - now > 1500 ? countdown(s.nextScanAt - now) : 'now'}`;
+    else if (cls === 'cooldown') text = `Paused · ${countdown((s.cooldownUntil || now) - now)}`;
+    else if (cls === 'scanning') text = 'Checking…';
+    else if (cls === 'quiet') text = 'Quiet hours';
+  }
+  el.className = `live ${cls}`;
+  $('.live-text', el).textContent = text;
+}
+
+function renderBanner() {
+  const el = $('#banner');
+  const p = state.status?.problem;
+  if (p && state.watches.some((w) => w.enabled)) {
+    const titles = {
+      LOGIN_REQUIRED: 'Facebook wants a login on this computer',
+      CHECKPOINT: 'Facebook wants a security check',
+      RATE_LIMITED: 'Facebook asked us to slow down',
+      NO_BROWSER: 'Browser mode needs Chrome or Edge',
+      INELIGIBLE: 'This account cannot use Marketplace',
+    };
+    const actions = [];
+    if (p.code === 'LOGIN_REQUIRED' || p.code === 'CHECKPOINT') actions.push(`<button class="btn btn-primary btn-sm" data-act="connect">${icon('login')}Connect Facebook</button>`);
+    actions.push(`<button class="btn btn-sm" data-act="resume">${icon('refresh')}Try again now</button>`);
+    if (p.code !== 'LOGIN_REQUIRED') actions.push(`<button class="btn btn-ghost btn-sm" data-act="settings">Settings</button>`);
+    el.className = `banner ${p.code === 'RATE_LIMITED' ? '' : 'danger'}`;
+    el.innerHTML = `${icon('alert')}<div class="banner-text"><b>${esc(titles[p.code] || 'Facebook checks are having trouble')}</b>${esc(p.message || '')}</div><div class="banner-actions">${actions.join('')}</div>`;
+    el.hidden = false;
+    return;
+  }
+  if (state.demo && !state.prefs.demoNoteHidden) {
+    el.className = 'banner';
+    el.innerHTML = `${icon('zap')}<div class="banner-text"><b>Demo mode</b>Listings come from a pretend Marketplace and new ones appear every 20–60 seconds. Nothing here touches Facebook. Run <code>npm start</code> for the real thing.</div><div class="banner-actions"><button class="btn btn-ghost btn-sm" data-act="hide-demo">Got it</button></div>`;
+    el.hidden = false;
+    return;
+  }
+  el.hidden = true;
+}
+
+// ---------------------------------------------------------------- watches
+function watchSub(w) {
+  const bits = [];
+  if (w.query) bits.push(`“${w.query}”`);
+  else if (w.category) bits.push(w.category);
+  bits.push(w.location || 'your area');
+  if (w.minPrice != null || w.maxPrice != null) {
+    bits.push(w.minPrice != null && w.maxPrice != null ? `${money(w.minPrice)}–${money(w.maxPrice)}` : w.minPrice != null ? `${money(w.minPrice)}+` : `under ${money(w.maxPrice)}`);
+  }
+  bits.push(`every ${intervalLabel(w.intervalSec || 180)}`);
+  return bits.join(' · ');
+}
+
+function watchStatus(w) {
+  const now = Date.now();
+  const scanning = state.status?.scanning === w.id || state.pendingScan.has(w.id);
+  if (scanning) return `<div class="watch-status">${icon('refresh', 'spin')}<span>Checking now…</span></div>`;
+  if (!w.enabled) return `<div class="watch-status"><span>Paused</span></div>`;
+  const next = w.nextScanAt && state.status?.state === 'running' ? `<span class="next">next ${w.nextScanAt - now > 1500 ? `in ${countdown(w.nextScanAt - now)}` : 'now'}</span>` : '';
+  const st = w.lastStatus;
+  if (!st) return `<div class="watch-status">${icon('refresh', 'spin')}<span>Waiting for first check…</span></div>`;
+  if (st.ok) {
+    const res = st.results === 0 ? 'no matches yet' : `${st.results} results`;
+    return `<div class="watch-status ok">${icon('check')}<span>${esc(agoLong(st.at, now))} · ${esc(res)}</span>${next}</div>`;
+  }
+  return `<div class="watch-status warn" title="${esc(st.message || '')}">${icon('alert')}<span>${esc(SHORT[st.code] || 'Problem')}</span>${next}</div>`;
+}
+
+function renderWatches() {
+  const list = $('#watches');
+  if (!state.watches.length) {
+    list.innerHTML = `<button class="setup-chip" data-act="add">${icon('plus')}<span><b>Create your first watch</b><br>Tell FlipRadar what to look for.</span></button>`;
+  } else {
+    const per = new Map();
+    const freshPer = new Map();
+    for (const l of state.listings.values()) {
+      if (l.hidden) continue;
+      for (const id of l.watchIds || []) {
+        per.set(id, (per.get(id) || 0) + 1);
+        if (state.fresh.has(l.id)) freshPer.set(id, (freshPer.get(id) || 0) + 1);
+      }
+    }
+    list.innerHTML = state.watches
+      .map((w) => {
+        const fresh = freshPer.get(w.id) || 0;
+        const cls = ['watch', state.view.watchId === w.id ? 'active' : '', w.enabled ? '' : 'off', w.lastStatus && !w.lastStatus.ok ? 'problem' : ''].join(' ');
+        return `<div class="${cls}" data-id="${esc(w.id)}" role="button" tabindex="0" aria-pressed="${state.view.watchId === w.id}" title="Show only this watch's listings">
+          <div class="watch-main">
+            <div class="watch-name"><span class="t">${esc(w.name)}</span>${fresh ? `<span class="count-pill new">${fresh} new</span>` : `<span class="count-pill">${per.get(w.id) || 0}</span>`}</div>
+            <div class="watch-sub" title="${esc(watchSub(w))}">${esc(watchSub(w))}</div>
+            ${watchStatus(w)}
+          </div>
+          <div class="watch-tools">
+            <label class="switch" title="${w.enabled ? 'Pause this watch' : 'Turn this watch on'}"><input type="checkbox" data-act="toggle" ${w.enabled ? 'checked' : ''} aria-label="Watch on or off"><span></span></label>
+            <div class="row">
+              <button class="icon-btn sm" data-act="scan" title="Check now" aria-label="Check now">${icon('refresh')}</button>
+              <button class="icon-btn sm" data-act="edit" title="Edit" aria-label="Edit">${icon('edit')}</button>
+            </div>
+          </div>
+        </div>`;
+      })
+      .join('');
+  }
+  renderSideFoot();
+}
+
+function renderSideFoot() {
+  const el = $('#side-foot');
+  const parts = [];
+  const cph = state.status?.checksPerHour || 0;
+  if (state.watches.length) {
+    const lvl = cph <= 60 ? ['gentle', 'Gentle'] : cph <= 120 ? ['moderate', 'Moderate'] : ['heavy', 'Heavy'];
+    parts.push(`<div class="meter" title="How often FlipRadar loads Facebook in total. Gentle is safest; heavy raises the chance Facebook slows you down.">${icon('gauge')}<span><b>${cph}</b> checks / hour</span><span class="lvl ${lvl[0]}">${lvl[1]}</span></div>`);
+  }
+  const on = notifyOn();
+  if (!on.length) parts.push(`<button class="setup-chip" data-act="settings">${icon('phone')}<span><b>Get alerts on your phone</b><br>Free, takes 2 minutes.</span></button>`);
+  else parts.push(`<button class="setup-chip" data-act="settings">${icon('bell')}<span><b>Phone alerts on</b> · ${esc(on.join(', '))}</span></button>`);
+  el.innerHTML = parts.join('');
+  $('#settings-dot').hidden = Boolean(on.length) || !state.watches.length;
+}
+
+// ---------------------------------------------------------------- feed
+const cardEls = new Map(); // id -> { el, sig }
+
+function cardSig(l) {
+  const names = (l.watchIds || []).map((id) => watchById(id)?.name || '').join('|');
+  return [l.title, l.priceText, l.price, l.prevPrice, l.wasPriceText, l.photo, l.saved, l.deal?.label, l.deal?.pct, l.locationText, names, l.creationTime, state.fresh.has(l.id)].join('¦');
+}
+
+function ageBadge(l, now = Date.now()) {
+  const ts = sortKey(l);
+  const age = now - ts;
+  const cls = age < 10 * 60e3 ? 'hot' : age < 60 * 60e3 ? 'warm' : '';
+  const label = l.creationTime ? ago(ts, now) : `seen ${ago(ts, now)}`;
+  const title = `${l.creationTime ? 'Posted' : 'First seen'} ${new Date(ts).toLocaleString()}`;
+  return `<span class="age ${cls}" data-ts="${ts}" data-posted="${l.creationTime ? 1 : 0}" title="${esc(title)}">${cls === 'hot' ? icon('zap') : ''}<span>${esc(label)}</span></span>`;
+}
+
+function cardHtml(l) {
+  const photo = safeUrl(l.photo);
+  const url = safeUrl(l.url);
+  const badges = [];
+  if (isDeal(l)) badges.push(`<span class="badge ${l.deal.label}" title="Typical price for this watch: ${esc(money(l.deal.median))} (from ${l.deal.n} listings)">${l.deal.label === 'steal' ? '🔥 ' : ''}${l.deal.pct}% under</span>`);
+  if (l.prevPrice != null) badges.push(`<span class="badge drop">${icon('down')}Price drop</span>`);
+  const was = l.prevPrice != null ? (l.prevPriceText || money(l.prevPrice)) : l.wasPriceText;
+  const w = watchById((l.watchIds || [])[0]);
+  return `
+    <a class="media" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-act="open" aria-label="Open listing on Facebook">
+      ${photo ? `<img src="${esc(photo)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : '<div class="noimg">No photo</div>'}
+      ${ageBadge(l)}
+      <div class="badges">${badges.join('')}</div>
+      ${state.fresh.has(l.id) ? '<span class="new-flag">NEW</span>' : ''}
+    </a>
+    <div class="body">
+      <div class="price-row"><span class="price">${esc(priceLabel(l))}</span>${was ? `<s class="was">${esc(was)}</s>` : ''}</div>
+      <h3 class="title"><a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-act="open" title="${esc(l.title)}">${esc(l.title)}</a></h3>
+      <div class="meta">${l.locationText ? `${icon('pin')}<span>${esc(l.locationText)}</span>` : ''}</div>
+      <div class="foot">
+        ${w ? `<span class="chip" title="Found by watch: ${esc(w.name)}">${esc(w.name)}</span>` : ''}
+        <div class="acts">
+          <button class="icon-btn sm ${l.saved ? 'on' : ''}" data-act="save" title="${l.saved ? 'Unsave' : 'Save'}" aria-label="${l.saved ? 'Unsave' : 'Save'}" aria-pressed="${Boolean(l.saved)}">${icon('star')}</button>
+          <button class="icon-btn sm" data-act="hide" title="Hide" aria-label="Hide">${icon('eye-off')}</button>
+          <a class="icon-btn sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-act="open" title="Open on Facebook" aria-label="Open on Facebook">${icon('external')}</a>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderTabs() {
+  const c = counts();
+  $('#count-all').textContent = c.all || '';
+  $('#count-deals').textContent = c.deals || '';
+  $('#count-saved').textContent = c.saved || '';
+  for (const b of $$('.tab')) b.classList.toggle('active', b.dataset.tab === state.view.tab);
+  for (const b of $$('.tab')) b.setAttribute('aria-selected', String(b.dataset.tab === state.view.tab));
+  const note = $('#filter-note');
+  const w = state.view.watchId && watchById(state.view.watchId);
+  if (w) {
+    note.innerHTML = `Showing <b>${esc(w.name)}</b> only <button class="btn btn-xs btn-ghost" data-act="clear-filter">${icon('x')}Show all</button>`;
+    note.hidden = false;
+  } else note.hidden = true;
+}
+
+function renderGrid() {
+  const grid = $('#grid');
+  const items = visibleListings();
+  const shown = items.slice(0, state.limit);
+  const keep = new Set();
+  let prev = null;
+  for (const l of shown) {
+    keep.add(l.id);
+    let entry = cardEls.get(l.id);
+    if (!entry) {
+      const el = document.createElement('article');
+      el.className = 'card';
+      el.dataset.id = l.id;
+      entry = { el, sig: '' };
+      cardEls.set(l.id, entry);
+    }
+    const sig = cardSig(l);
+    if (entry.sig !== sig) {
+      entry.el.innerHTML = cardHtml(l);
+      entry.sig = sig;
+    }
+    entry.el.classList.toggle('is-new', state.fresh.has(l.id));
+    entry.el.classList.toggle('is-baseline', Boolean(l.baseline));
+    const want = prev ? prev.nextSibling : grid.firstChild;
+    if (want !== entry.el) grid.insertBefore(entry.el, want);
+    prev = entry.el;
+  }
+  for (const [id, entry] of cardEls) {
+    if (!keep.has(id)) {
+      entry.el.remove();
+      cardEls.delete(id);
+    }
+  }
+  $('#btn-more').hidden = !(items.length > state.limit || (!state.exhausted && items.length >= state.limit));
+  renderEmpty(items.length);
+  renderTabs();
+}
+
+function renderEmpty(n) {
+  const el = $('#empty');
+  if (n) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  if (!state.watches.length) {
+    el.innerHTML = `
+      <div class="hero">
+        <svg class="radar-art" viewBox="0 0 300 300" aria-hidden="true"><defs><radialGradient id="sweep" cx="150" cy="150" r="150" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3ee08f" stop-opacity=".5"/><stop offset="1" stop-color="#3ee08f" stop-opacity="0"/></radialGradient></defs><circle cx="150" cy="150" r="140"/><circle cx="150" cy="150" r="100"/><circle cx="150" cy="150" r="60"/><circle cx="150" cy="150" r="20"/><path class="sweep" d="M150 150 L150 10 A140 140 0 0 1 271 80 Z"/></svg>
+        <h1>Catch Marketplace deals the minute they’re posted.</h1>
+        <p class="lead">FlipRadar keeps checking Facebook Marketplace for the things you flip, newest first, and pings your phone as soon as something new shows up. The good ones go fast.</p>
+        <ol class="steps">
+          <li><b>Make a watch</b>Type what you want (or paste a Marketplace search link), your area and price range.</li>
+          <li><b>Turn on phone alerts</b>Free ntfy app, Discord or Telegram. Takes about two minutes.</li>
+          <li><b>Leave it running</b>New listings land here and on your phone within minutes.</li>
+        </ol>
+        <button class="btn btn-primary" data-act="add">${icon('plus')}Create your first watch</button>
+      </div>`;
+    return;
+  }
+  const { tab, q } = state.view;
+  let title = 'No listings yet';
+  let sub = '';
+  let spinner = false;
+  if (q) {
+    title = `Nothing matches “${q}”`;
+    sub = 'Try a different word, or clear the filter box.';
+  } else if (tab === 'saved') {
+    title = 'Nothing saved yet';
+    sub = 'Tap the star on a listing to keep it here.';
+  } else if (tab === 'deals') {
+    title = 'No deals spotted yet';
+    sub = 'A deal is a listing priced well under what is typical for that watch, or one whose price dropped. FlipRadar needs a few listings to learn prices first.';
+  } else if (state.watches.some((w) => w.enabled && !w.lastStatus)) {
+    title = 'Checking Facebook…';
+    sub = 'The first results usually show up within a few seconds.';
+    spinner = true;
+  } else if (state.status?.problem || state.watches.filter((w) => w.enabled).every((w) => w.lastStatus && !w.lastStatus.ok)) {
+    title = 'Facebook isn’t showing results right now';
+    sub = 'See the message at the top of the page, or open the activity log (pulse icon) for details.';
+  } else {
+    sub = 'Nothing listed in the last 24 hours matches yet. New listings will appear here automatically.';
+  }
+  el.innerHTML = `<div class="empty-small">${spinner ? '<div class="scanner"></div>' : ''}<b>${esc(title)}</b>${esc(sub)}</div>`;
+}
+
+function refreshAges() {
+  const now = Date.now();
+  for (const el of $$('.age[data-ts]')) {
+    const ts = Number(el.dataset.ts);
+    const posted = el.dataset.posted === '1';
+    const age = now - ts;
+    el.classList.toggle('hot', age < 10 * 60e3);
+    el.classList.toggle('warm', age >= 10 * 60e3 && age < 60 * 60e3);
+    const span = el.querySelector('span');
+    if (span) span.textContent = posted ? ago(ts, now) : `seen ${ago(ts, now)}`;
+    if (age >= 10 * 60e3) el.querySelector('svg')?.remove();
+  }
+  // The "NEW" glow fades after 20 minutes.
+  let changed = false;
+  for (const [id, at] of state.fresh) {
+    if (now - at > 20 * 60e3) {
+      state.fresh.delete(id);
+      changed = true;
+    }
+  }
+  if (changed) {
+    renderGrid();
+    renderWatches();
+  }
+}
+
+function renderAll() {
+  $('#demo-badge').hidden = !state.demo;
+  renderLive();
+  renderBanner();
+  renderWatches();
+  renderGrid();
+}
+
+// ---------------------------------------------------------------- alerts in the browser
+let audio;
+function unlockAudio() {
+  try {
+    audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+  } catch {
+    /* no audio */
+  }
+}
+function chime(hot) {
+  if (!state.prefs.sound) return;
+  try {
+    unlockAudio();
+    if (!audio || audio.state !== 'running') return;
+    const t = audio.currentTime + 0.02;
+    (hot ? [784, 1047, 1319] : [880, 1320]).forEach((f, i) => {
+      const o = audio.createOscillator();
+      const g = audio.createGain();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const s = t + i * 0.11;
+      g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(0.22, s + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, s + 0.32);
+      o.connect(g).connect(audio.destination);
+      o.start(s);
+      o.stop(s + 0.36);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+function desktopNotify(l) {
+  if (!state.prefs.desktop || !('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const body = [l.locationText, isDeal(l) ? `${l.deal.pct}% under typical` : '', l.prevPrice != null ? `was ${l.prevPriceText || money(l.prevPrice)}` : ''].filter(Boolean).join(' · ');
+    const n = new Notification(`${priceLabel(l)} · ${l.title}`, { body, icon: safeUrl(l.photo) || '/icon-192.png', tag: l.id });
+    n.onclick = () => {
+      window.focus();
+      if (safeUrl(l.url)) window.open(l.url, '_blank', 'noopener');
+      n.close();
+    };
+  } catch {
+    /* some browsers only allow notifications from a service worker */
+  }
+}
+
+function updateTitle() {
+  document.title = state.unread ? `(${state.unread}) New · FlipRadar` : 'FlipRadar';
+}
+
+function announce(alerted) {
+  if (!alerted.length) return;
+  chime(alerted.some((l) => isDeal(l) && ['steal', 'great'].includes(l.deal.label)));
+  alerted.slice(0, 3).forEach(desktopNotify);
+  if (document.hidden) {
+    state.unread += alerted.length;
+    updateTitle();
+  }
+}
+
+// ---------------------------------------------------------------- live updates (SSE)
+function connectEvents() {
+  const es = new EventSource('/api/events');
+  let needsReload = false;
+  es.onopen = () => {
+    state.online = true;
+    renderLive();
+    if (needsReload) {
+      needsReload = false;
+      loadState().catch(() => {});
+    }
+  };
+  es.onerror = () => {
+    state.online = false;
+    needsReload = true;
+    renderLive();
+  };
+  const on = (name, fn) =>
+    es.addEventListener(name, (e) => {
+      try {
+        fn(JSON.parse(e.data));
+      } catch (err) {
+        console.error(name, err);
+      }
+    });
+
+  on('listings', (items) => {
+    const alerted = [];
+    const now = Date.now();
+    for (const l of items) {
+      state.listings.set(l.id, l);
+      if (!l.baseline) state.fresh.set(l.id, now);
+      if (l.alertedAt) alerted.push(l);
+    }
+    renderGrid();
+    renderWatches();
+    announce(alerted);
+  });
+  on('updates', (items) => {
+    const alerted = [];
+    for (const l of items) {
+      const before = state.listings.get(l.id);
+      state.listings.set(l.id, l);
+      if (l.prevPrice != null && l.alertedAt && (!before || before.price !== l.price)) alerted.push(l);
+    }
+    renderGrid();
+    renderWatches();
+    announce(alerted);
+  });
+  on('watch', (w) => {
+    const i = state.watches.findIndex((x) => x.id === w.id);
+    if (i === -1) state.watches.push(w);
+    else state.watches[i] = w;
+    if (state.pendingScan.has(w.id) && (w.lastScanAt || 0) >= state.pendingScan.get(w.id)) state.pendingScan.delete(w.id);
+    renderWatches();
+    renderEmpty(visibleListings().length);
+  });
+  on('watch-removed', ({ id }) => {
+    state.watches = state.watches.filter((w) => w.id !== id);
+    if (state.view.watchId === id) state.view.watchId = null;
+    for (const [lid, l] of state.listings) {
+      l.watchIds = (l.watchIds || []).filter((x) => x !== id);
+      if (!l.watchIds.length && !l.saved) state.listings.delete(lid);
+    }
+    renderAll();
+  });
+  on('status', (s) => {
+    state.status = s;
+    renderLive();
+    renderBanner();
+    renderWatches();
+    if (!$('#grid').children.length) renderEmpty(0);
+  });
+  on('log', (e) => {
+    state.logs.push(e);
+    if (state.logs.length > 120) state.logs.shift();
+    if (state.modal === 'activity') renderActivityBody();
+  });
+  on('facebook', (f) => {
+    state.facebook = f;
+    if (state.modal === 'settings') renderFacebookBox();
+  });
+  on('settings', (s) => {
+    state.settings = s;
+    renderSideFoot();
+  });
+  on('notify', (errors) => {
+    state.notifyErrors = errors || {};
+    if (state.modal === 'settings') renderChannelStates();
+  });
+  on('toast', (t) => toast(t.text, t.kind || 'ok', { ms: 6000 }));
+}
+
+async function loadState() {
+  const s = await api('/api/state');
+  state.settings = s.settings;
+  state.watches = s.watches;
+  state.status = s.status;
+  state.facebook = s.facebook;
+  state.logs = s.logs || [];
+  state.notifyErrors = s.notifyErrors || {};
+  state.demo = Boolean(s.demo);
+  state.junkWords = s.junkWords || [];
+  state.intervals = s.intervals || state.intervals;
+  state.listings = new Map(s.listings.map((l) => [l.id, l]));
+  state.exhausted = s.listings.length < 400;
+  renderAll();
+}
+
+// ---------------------------------------------------------------- modal plumbing
+const modal = $('#modal');
+
+function openModal(name, html, { wide = false } = {}) {
+  state.modal = name;
+  modal.className = `modal${wide ? ' wide' : ''}`;
+  modal.innerHTML = html;
+  if (!modal.open) modal.showModal();
+  const first = modal.querySelector('[autofocus]');
+  if (first) setTimeout(() => first.focus(), 30);
+}
+function closeModal() {
+  if (modal.open) modal.close();
+}
+modal.addEventListener('close', () => {
+  state.modal = null;
+  modal.innerHTML = '';
+});
+let pressedBackdrop = false;
+modal.addEventListener('pointerdown', (e) => {
+  pressedBackdrop = e.target === modal;
+});
+modal.addEventListener('click', (e) => {
+  if (e.target === modal && pressedBackdrop) closeModal(); // click on the dimmed backdrop
+  if (e.target.closest('[data-close]')) closeModal();
+});
+
+const head = (title, sub = '') => `<div class="m-head"><div><h2>${esc(title)}</h2>${sub ? `<p class="hint">${sub}</p>` : ''}</div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>`;
+
+// ---------------------------------------------------------------- watch form
+function openWatchForm(w = null) {
+  const v = w || { name: '', query: '', location: '', minPrice: null, maxPrice: null, include: [], exclude: [], intervalSec: 180, alertMode: 'all', alertDrops: true, extraParams: {}, category: '' };
+  const intervals = state.intervals
+    .map((s) => `<option value="${s}" ${Number(v.intervalSec) === s ? 'selected' : ''}>${intervalLabel(s)}${s === 180 ? ' (recommended)' : s < 180 ? ' (faster, busier)' : ''}</option>`)
+    .join('');
+  openModal(
+    'watch',
+    `${head(w ? 'Edit watch' : 'New watch', 'FlipRadar checks this search, newest first, and alerts you about anything new.')}
+    <form class="m-body" id="watch-form" novalidate>
+      <div class="paste-box">
+        <div class="field"><span>${icon('link')} Paste a Marketplace search link <small>(easiest, optional)</small></span>
+          <div class="paste-row"><input class="input" id="f-link" placeholder="https://www.facebook.com/marketplace/…/search/?query=…" autocomplete="off" inputmode="url"></div>
+        </div>
+        <div class="paste-note" id="paste-note">On Facebook, search Marketplace with your location and filters, then copy the address bar.</div>
+      </div>
+      <div class="divider">or fill in</div>
+      <label class="field"><span>What are you looking for?</span><input class="input" id="f-query" value="${esc(v.query)}" placeholder="e.g. road bike, PS5, sectional couch" ${w ? '' : 'autofocus'} maxlength="120"></label>
+      <label class="field"><span>Location <small>— a Facebook city name like <code>tampa</code>, <code>nyc</code>, <code>la</code>, or the number from a Marketplace link. Leave empty to use your Facebook location.</small></span><input class="input" id="f-location" value="${esc(v.location)}" placeholder="tampa" maxlength="80" autocomplete="off"></label>
+      <div class="row2">
+        <label class="field"><span>Min price</span><div class="money-wrap"><input class="input money" id="f-min" inputmode="decimal" value="${v.minPrice ?? ''}" placeholder="0"></div></label>
+        <label class="field"><span>Max price</span><div class="money-wrap"><input class="input money" id="f-max" inputmode="decimal" value="${v.maxPrice ?? ''}" placeholder="any"></div></label>
+      </div>
+      <label class="field"><span>Only if the title has one of these words <small>(optional, comma separated)</small></span><input class="input" id="f-include" value="${esc((v.include || []).join(', '))}" placeholder="trek, specialized, cannondale"></label>
+      <div class="field"><span>Skip listings with these words <small>(comma separated)</small></span><input class="input" id="f-exclude" value="${esc((v.exclude || []).join(', '))}" placeholder="broken, for parts, kids">
+        <div class="chips"><button type="button" class="chip-btn" data-act="junk">+ Add common junk words</button></div>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Check every</span><select class="input" id="f-interval">${intervals}</select></label>
+        <label class="field"><span>Name <small>(optional)</small></span><input class="input" id="f-name" value="${esc(v.name)}" placeholder="Auto from search" maxlength="60"></label>
+      </div>
+      <div class="field"><span>Alert me about</span>
+        <div class="choice-row">
+          <label class="choice"><input type="radio" name="f-mode" value="all" ${v.alertMode !== 'deals' ? 'checked' : ''}><b>Every new listing</b><small>Fastest way to be first.</small></label>
+          <label class="choice"><input type="radio" name="f-mode" value="deals" ${v.alertMode === 'deals' ? 'checked' : ''}><b>Only deals</b><small>Priced well under typical for this search.</small></label>
+        </div>
+      </div>
+      <label class="check-line"><span class="switch"><input type="checkbox" id="f-drops" ${v.alertDrops !== false ? 'checked' : ''}><span></span></span>Also alert me when a seller drops the price</label>
+      <div class="form-error" id="f-error" hidden></div>
+    </form>
+    <div class="m-foot">
+      ${w ? `<button class="btn btn-danger" data-act="delete-watch">${icon('trash')}Delete</button>` : ''}
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" data-close>Cancel</button>
+      <button class="btn btn-primary" id="f-save">${icon('check')}${w ? 'Save changes' : 'Start watching'}</button>
+    </div>`,
+  );
+
+  let parsed = { extraParams: v.extraParams || {}, category: v.category || '' };
+  const note = $('#paste-note');
+  const tryLink = debounce(async () => {
+    const raw = $('#f-link').value.trim();
+    if (!raw) return;
+    try {
+      const p = await api('/api/parse-url', { method: 'POST', body: { url: raw } });
+      parsed = { extraParams: p.extraParams || {}, category: p.category || '' };
+      if (p.query) $('#f-query').value = p.query;
+      $('#f-location').value = p.location || '';
+      $('#f-min').value = p.minPrice ?? '';
+      $('#f-max').value = p.maxPrice ?? '';
+      if (!$('#f-name').value && p.query) $('#f-name').value = p.query;
+      const what = p.query ? `“${p.query}”` : p.category || 'Marketplace';
+      note.className = 'paste-note ok';
+      note.innerHTML = `${icon('check')}<span>Got it: ${esc(what)}${p.location ? ` near ${esc(p.location)}` : ''}${Object.keys(p.extraParams || {}).length ? ' (plus your other filters)' : ''}. Check the fields below.</span>`;
+    } catch (e) {
+      note.className = 'paste-note err';
+      note.textContent = e.message;
+    }
+  }, 250);
+  $('#f-link').addEventListener('input', tryLink);
+
+  modal.querySelector('[data-act="junk"]').addEventListener('click', () => {
+    const cur = $('#f-exclude').value.split(',').map((s) => s.trim()).filter(Boolean);
+    for (const j of state.junkWords) if (!cur.includes(j)) cur.push(j);
+    $('#f-exclude').value = cur.join(', ');
+  });
+
+  const save = async (e) => {
+    e?.preventDefault();
+    const err = $('#f-error');
+    err.hidden = true;
+    const body = {
+      name: $('#f-name').value,
+      query: $('#f-query').value,
+      location: $('#f-location').value,
+      minPrice: $('#f-min').value,
+      maxPrice: $('#f-max').value,
+      include: $('#f-include').value,
+      exclude: $('#f-exclude').value,
+      intervalSec: Number($('#f-interval').value),
+      alertMode: modal.querySelector('input[name="f-mode"]:checked')?.value || 'all',
+      alertDrops: $('#f-drops').checked,
+      extraParams: parsed.extraParams,
+      category: $('#f-query').value.trim() ? '' : parsed.category,
+    };
+    const btn = $('#f-save');
+    btn.classList.add('loading');
+    try {
+      const saved = w ? await api(`/api/watches/${w.id}`, { method: 'PUT', body }) : await api('/api/watches', { method: 'POST', body });
+      const i = state.watches.findIndex((x) => x.id === saved.id);
+      if (i === -1) state.watches.push(saved);
+      else state.watches[i] = saved;
+      closeModal();
+      renderAll();
+      toast(w ? 'Watch updated.' : `Watching “${saved.name}”. First check is starting.`);
+    } catch (ex) {
+      err.textContent = ex.message;
+      err.hidden = false;
+    } finally {
+      btn.classList.remove('loading');
+    }
+  };
+  $('#f-save').addEventListener('click', save);
+  $('#watch-form').addEventListener('submit', save);
+  modal.querySelector('[data-act="delete-watch"]')?.addEventListener('click', async () => {
+    if (!confirm(`Delete “${w.name}”? Its listings disappear too (saved ones stay).`)) return;
+    try {
+      await api(`/api/watches/${w.id}`, { method: 'DELETE' });
+      closeModal();
+      toast('Watch deleted.');
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  });
+}
+
+// ---------------------------------------------------------------- settings
+function setPath(obj, pathStr, value) {
+  const keys = pathStr.split('.');
+  let o = obj;
+  keys.slice(0, -1).forEach((k) => (o = o[k] ??= {}));
+  o[keys.at(-1)] = value;
+  return obj;
+}
+
+async function saveSetting(pathStr, value) {
+  try {
+    state.settings = await api('/api/settings', { method: 'PUT', body: setPath({}, pathStr, value) });
+    const tick = $('#saved-tick');
+    if (tick) {
+      tick.classList.add('show');
+      setTimeout(() => tick.classList.remove('show'), 1400);
+    }
+    renderSideFoot();
+    renderChannelStates();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function hourOptions(sel) {
+  return Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? 'selected' : ''}>${new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' })}</option>`).join('');
+}
+
+function openSettings() {
+  const s = state.settings;
+  const n = s.notify;
+  const ages = [15, 30, 60, 120, 240, 1440]
+    .map((m) => `<option value="${m}" ${s.maxAlertAgeMin === m ? 'selected' : ''}>${m < 60 ? `${m} minutes` : m === 1440 ? '24 hours (everything new)' : `${m / 60} hour${m > 60 ? 's' : ''}`}${m === 60 ? ' (recommended)' : ''}</option>`)
+    .join('');
+  const sw = (key, on) => `<span class="switch"><input type="checkbox" data-k="${key}" ${on ? 'checked' : ''}><span></span></span>`;
+  openModal(
+    'settings',
+    `${head('Settings')}
+    <div class="m-body">
+      <section class="section">
+        <h3>${icon('phone')}Phone alerts with ntfy <span class="state" id="st-ntfy"></span></h3>
+        <p class="hint">Free and no sign-up. Alerts show the photo and open the listing when you tap them.</p>
+        <ol class="howto">
+          <li>Install the free <b>ntfy</b> app (<a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">iPhone</a> · <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a>).</li>
+          <li>Tap <b>+</b>, then subscribe to this topic (it's your private code, keep it secret):</li>
+        </ol>
+        <div class="topic"><code id="ntfy-topic">${esc(n.ntfy.topic)}</code><button class="btn btn-xs btn-ghost" data-act="copy-topic">${icon('copy')}Copy</button></div>
+        <div class="toggle-line"><div class="txt"><b>Send alerts to ntfy</b><small>Then tap “Send test” to check your phone buzzes.</small></div>${sw('notify.ntfy.enabled', n.ntfy.enabled)}</div>
+        <div class="btn-row"><button class="btn btn-sm" data-test="ntfy">${icon('bell')}Send test</button></div>
+        <details class="more"><summary>Use your own ntfy server</summary><div class="inner">
+          <label class="field"><span>Server</span><input class="input" data-k="notify.ntfy.server" value="${esc(n.ntfy.server)}"></label>
+          <label class="field"><span>Topic</span><input class="input" data-k="notify.ntfy.topic" value="${esc(n.ntfy.topic)}"></label>
+          <label class="field"><span>Access token <small>(only for protected servers)</small></span><input class="input" type="password" data-k="notify.ntfy.token" value="${esc(n.ntfy.token)}" autocomplete="off"></label>
+        </div></details>
+      </section>
+
+      <section class="section">
+        <h3>${icon('bell')}Discord & Telegram <span class="state" id="st-chat"></span></h3>
+        <details class="more"><summary>Discord <span class="state" id="st-discord"></span></summary><div class="inner">
+          <p class="hint">In your Discord server: channel settings → Integrations → Webhooks → New webhook → Copy webhook URL.</p>
+          <label class="field"><span>Webhook URL</span><input class="input" type="password" data-k="notify.discord.webhookUrl" value="${esc(n.discord.webhookUrl)}" placeholder="https://discord.com/api/webhooks/…" autocomplete="off"></label>
+          <div class="toggle-line"><div class="txt"><b>Send alerts to Discord</b></div>${sw('notify.discord.enabled', n.discord.enabled)}</div>
+          <div class="btn-row"><button class="btn btn-sm" data-test="discord">${icon('bell')}Send test</button></div>
+        </div></details>
+        <details class="more"><summary>Telegram <span class="state" id="st-telegram"></span></summary><div class="inner">
+          <p class="hint">Message <b>@BotFather</b> → /newbot → copy the token. Then message your bot once and get your chat ID from <b>@userinfobot</b>.</p>
+          <div class="row2">
+            <label class="field"><span>Bot token</span><input class="input" type="password" data-k="notify.telegram.botToken" value="${esc(n.telegram.botToken)}" autocomplete="off"></label>
+            <label class="field"><span>Chat ID</span><input class="input" data-k="notify.telegram.chatId" value="${esc(n.telegram.chatId)}" inputmode="numeric"></label>
+          </div>
+          <div class="toggle-line"><div class="txt"><b>Send alerts to Telegram</b></div>${sw('notify.telegram.enabled', n.telegram.enabled)}</div>
+          <div class="btn-row"><button class="btn btn-sm" data-test="telegram">${icon('bell')}Send test</button></div>
+        </div></details>
+      </section>
+
+      <section class="section">
+        <h3>${icon('volume')}This browser</h3>
+        <div class="toggle-line"><div class="txt"><b>Play a sound for new listings</b><small>While this page is open.</small></div><span class="switch"><input type="checkbox" data-pref="sound" ${state.prefs.sound ? 'checked' : ''}><span></span></span></div>
+        <div class="toggle-line"><div class="txt"><b>Desktop notifications</b><small>Pop-ups on this computer while this page is open.</small></div><span class="switch"><input type="checkbox" data-pref="desktop" ${state.prefs.desktop ? 'checked' : ''}><span></span></span></div>
+      </section>
+
+      <section class="section" id="fb-box"></section>
+
+      <section class="section">
+        <h3>${icon('zap')}Smart alert rules</h3>
+        <label class="field"><span>Only alert for listings posted within</span><select class="input" data-k="maxAlertAgeMin" data-num>${ages}</select>
+          <small class="hint">Facebook sometimes bumps older listings to the top. This keeps those from pinging you.</small></label>
+        <div class="toggle-line"><div class="txt"><b>Hide “$1” listings</b><small>Sellers use $1 to mean “message me for the price”. Free items still show.</small></div>${sw('hidePlaceholderPrices', s.hidePlaceholderPrices)}</div>
+        <div class="toggle-line"><div class="txt"><b>Quiet hours</b><small>Pause checking overnight. Easier on Facebook, and on your sleep.</small></div>${sw('quietHours.enabled', s.quietHours.enabled)}</div>
+        <div class="row2">
+          <label class="field"><span>From</span><select class="input" data-k="quietHours.start" data-num>${hourOptions(s.quietHours.start)}</select></label>
+          <label class="field"><span>Until</span><select class="input" data-k="quietHours.end" data-num>${hourOptions(s.quietHours.end)}</select></label>
+        </div>
+      </section>
+    </div>
+    <div class="m-foot"><span class="saved-tick" id="saved-tick">${icon('check')} Saved</span><span class="spacer"></span><button class="btn btn-primary" data-close>Done</button></div>`,
+    { wide: true },
+  );
+
+  renderFacebookBox();
+  renderChannelStates();
+}
+
+function renderChannelStates() {
+  if (state.modal !== 'settings' || !state.settings) return;
+  const n = state.settings.notify;
+  const label = (ch) => {
+    const err = state.notifyErrors?.[ch];
+    if (err) return ['err', `Last alert failed: ${err.message}`];
+    return n[ch].enabled ? ['ok', 'On'] : ['off', 'Off'];
+  };
+  for (const ch of ['ntfy', 'discord', 'telegram']) {
+    const el = $(`#st-${ch}`);
+    if (!el) continue;
+    const [cls, text] = label(ch);
+    el.className = `state ${cls}`;
+    el.textContent = text;
+  }
+}
+
+function renderFacebookBox() {
+  const box = $('#fb-box');
+  if (!box || !state.settings) return;
+  const f = state.facebook || { browser: {} };
+  const s = state.settings;
+  const b = f.browser || {};
+  const lastFast = state.watches.map((w) => w.lastStatus).find((st) => st && st.engine === 'fast' && st.ok);
+  let line;
+  if (b.loginActive) line = ['warn', 'refresh', 'A browser window is open. Log in to Facebook there; it closes by itself when you are done.'];
+  else if (f.connected) line = ['ok', 'check', `Connected with a Facebook account${f.connectedAt ? ` since ${new Date(f.connectedAt).toLocaleDateString()}` : ''}. Saved in FlipRadar's own browser profile.`];
+  else if (lastFast) line = ['ok', 'check', 'Fast mode is working. No Facebook login needed right now.'];
+  else line = ['warn', 'alert', 'Not connected. That is fine as long as checks work. Connect only if Facebook starts asking for a login.'];
+  const canConnect = b.installed && b.executable && b.canShowWindow;
+  const why = !b.executable ? 'Install Google Chrome or Microsoft Edge to use this.' : !b.canShowWindow ? 'No screen here (Docker or server). Use “Paste cookies” below instead.' : '';
+  box.innerHTML = `
+    <h3>${icon('login')}Facebook connection</h3>
+    <div class="status-line ${line[0]}">${icon(line[1], b.loginActive ? 'spin' : '')}<span>${esc(line[2])}</span></div>
+    <label class="field"><span>How to read Marketplace</span>
+      <select class="input" data-k="engine">
+        <option value="auto" ${s.engine === 'auto' ? 'selected' : ''}>Auto (recommended): fast mode, real browser if Facebook pushes back</option>
+        <option value="fast" ${s.engine === 'fast' ? 'selected' : ''}>Fast mode only: light, no browser</option>
+        <option value="browser" ${s.engine === 'browser' ? 'selected' : ''}>Browser only: most reliable, uses more memory</option>
+      </select></label>
+    <div class="btn-row">
+      <button class="btn btn-sm ${f.connected ? '' : 'btn-primary'}" data-act="connect" ${canConnect && !b.loginActive ? '' : 'disabled'}>${icon('login')}${f.connected ? 'Reconnect' : 'Connect Facebook'}</button>
+      ${f.connected || b.hasProfile ? `<button class="btn btn-sm btn-ghost" data-act="disconnect">Disconnect</button>` : ''}
+    </div>
+    ${why ? `<p class="hint">${esc(why)}</p>` : ''}
+    <p class="hint">Honest heads-up: Facebook's rules don't allow automated checking. Logged-out fast mode doesn't use any account. If you connect one, a spare account is safest, and gentle check speeds keep the risk low.</p>
+    <details class="more"><summary>Advanced: paste cookies <span class="state ${s.cookiesSet ? 'ok' : 'off'}">${s.cookiesSet ? (s.cookiesKind === 'session' ? 'Logged-in cookies saved' : 'Saved (no login cookie)') : 'None'}</span></summary><div class="inner">
+      <p class="hint">For servers without a screen. Export your facebook.com cookies with a cookie extension (JSON or <code>name=value; …</code>) and paste them here. They're stored only on this computer.</p>
+      <textarea class="input" id="cookie-box" placeholder="c_user=…; xs=…; datr=…" spellcheck="false"></textarea>
+      <div class="btn-row"><button class="btn btn-sm" data-act="save-cookies">Save cookies</button>${s.cookiesSet ? '<button class="btn btn-sm btn-ghost" data-act="clear-cookies">Remove cookies</button>' : ''}</div>
+    </div></details>`;
+}
+
+async function onSettingsChange(e) {
+  if (state.modal !== 'settings') return;
+  const t = e.target;
+  if (t.dataset.pref) {
+    if (t.dataset.pref === 'desktop' && t.checked) {
+      if (!('Notification' in window)) {
+        toast('This browser does not support desktop notifications.', 'warn');
+        t.checked = false;
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        toast('Notifications are blocked for this page in your browser settings.', 'warn');
+        t.checked = false;
+        return;
+      }
+    }
+    state.prefs[t.dataset.pref] = t.checked;
+    savePrefs();
+    if (t.dataset.pref === 'sound' && t.checked) {
+      unlockAudio();
+      chime(false);
+    }
+    return;
+  }
+  const key = t.dataset.k;
+  if (!key) return;
+  let value = t.type === 'checkbox' ? t.checked : t.value;
+  if (t.dataset.num !== undefined) value = Number(value);
+  if (t.type === 'password' && value === SECRET) return;
+  await saveSetting(key, value);
+  if (key === 'notify.ntfy.topic') $('#ntfy-topic').textContent = state.settings.notify.ntfy.topic;
+}
+
+async function onSettingsClick(e) {
+  if (state.modal !== 'settings') return;
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const test = btn.dataset.test;
+  if (test) {
+    const cfg = {};
+    for (const el of modal.querySelectorAll(`[data-k^="notify.${test}."]`)) {
+      const k = el.dataset.k.split('.').pop();
+      if (k !== 'enabled') cfg[k] = el.value;
+    }
+    btn.classList.add('loading');
+    try {
+      await api('/api/notify/test', { method: 'POST', body: { channel: test, config: cfg } });
+      toast(`Test sent to ${test}. Check your ${test === 'ntfy' ? 'phone' : 'app'}!`);
+      delete state.notifyErrors[test];
+      renderChannelStates();
+    } catch (ex) {
+      toast(ex.message, 'error', { ms: 8000 });
+    } finally {
+      btn.classList.remove('loading');
+    }
+    return;
+  }
+  switch (btn.dataset.act) {
+    case 'copy-topic':
+      try {
+        await navigator.clipboard.writeText(state.settings.notify.ntfy.topic);
+        toast('Topic copied.');
+      } catch {
+        toast('Copy failed. Select the text and copy it by hand.', 'warn');
+      }
+      break;
+    case 'save-cookies': {
+      const v = $('#cookie-box').value.trim();
+      if (!v) return toast('Paste the cookies first.', 'warn');
+      await saveSetting('cookies', v);
+      $('#cookie-box').value = '';
+      renderFacebookBox();
+      toast(state.settings.cookiesKind === 'session' ? 'Cookies saved. Checks will use your login.' : 'Saved, but no login cookie (c_user/xs) was found.', state.settings.cookiesKind === 'session' ? 'ok' : 'warn');
+      break;
+    }
+    case 'clear-cookies':
+      await saveSetting('cookies', '');
+      renderFacebookBox();
+      break;
+    case 'connect':
+      connectFacebook();
+      break;
+    case 'disconnect':
+      if (!confirm('Disconnect Facebook? This deletes the saved login from FlipRadar (not from Facebook).')) return;
+      try {
+        await api('/api/facebook/disconnect', { method: 'POST' });
+        toast('Disconnected.');
+      } catch (ex) {
+        toast(ex.message, 'error');
+      }
+      break;
+    default:
+  }
+}
+
+async function connectFacebook() {
+  try {
+    await api('/api/facebook/connect', { method: 'POST' });
+    toast('A browser window is opening. Log in to Facebook there; it closes by itself afterwards.', 'ok', { ms: 9000 });
+  } catch (e) {
+    toast(e.message, 'error', { ms: 9000 });
+    if (state.modal !== 'settings') openSettings();
+  }
+}
+
+// ---------------------------------------------------------------- activity log
+function openActivity() {
+  openModal('activity', `${head('Activity', 'The last checks FlipRadar ran against Marketplace.')}<div class="m-body" id="activity-body"></div><div class="m-foot"><span class="spacer"></span><button class="btn btn-primary" data-close>Close</button></div>`, { wide: true });
+  renderActivityBody();
+}
+
+function renderActivityBody() {
+  const el = $('#activity-body');
+  if (!el) return;
+  const rows = [...state.logs].reverse().slice(0, 80);
+  const errs = Object.entries(state.notifyErrors || {});
+  el.innerHTML = `
+    ${errs.length ? `<div class="status-line warn">${icon('alert')}<span>${errs.map(([k, v]) => `${esc(k)}: ${esc(v.message)}`).join(' · ')}</span></div>` : ''}
+    ${rows.length ? `<table class="log"><thead><tr><th>When</th><th>Watch</th><th>Result</th><th>Time</th></tr></thead><tbody>
+      ${rows
+        .map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleTimeString())}</td><td>${esc(r.watch)}${r.manual ? ' <span class="eng">(manual)</span>' : ''}</td>
+          <td class="res">${r.code === 'OK' ? `<span class="ok">OK</span> ${r.found} found${r.fresh ? ` · <b>${r.fresh} new</b>` : ''}${r.alerts ? ` · ${r.alerts} alerted` : ''}` : `<span class="bad">${esc(SHORT[r.code] || r.code)}</span><br><small>${esc(r.message || '')}</small>`}
+          <div class="eng">${esc(r.engine === 'fast' ? 'fast mode' : r.engine === 'browser' ? (r.fallbackFrom ? `browser, after fast mode got: ${SHORT[r.fallbackFrom] || r.fallbackFrom}` : 'browser') : r.engine || '')}</div></td>
+          <td class="num">${r.ms ? `${(r.ms / 1000).toFixed(1)}s` : '—'}</td></tr>`)
+        .join('')}
+    </tbody></table>` : '<p class="hint">No checks yet.</p>'}`;
+}
+
+// ---------------------------------------------------------------- global events
+function bindEvents() {
+  modal.addEventListener('change', onSettingsChange);
+  modal.addEventListener('click', onSettingsClick);
+  document.addEventListener('pointerdown', unlockAudio, { once: true });
+  document.addEventListener('keydown', unlockAudio, { once: true });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.unread) {
+      state.unread = 0;
+      updateTitle();
+    }
+  });
+
+  $('#btn-add').addEventListener('click', () => openWatchForm());
+  $('#btn-settings').addEventListener('click', openSettings);
+  $('#btn-activity').addEventListener('click', openActivity);
+  $('#btn-more').addEventListener('click', async () => {
+    state.limit += PAGE;
+    const items = visibleListings();
+    if (items.length < state.limit && !state.exhausted) {
+      const oldest = Math.min(...[...state.listings.values()].map(sortKey));
+      try {
+        const { listings } = await api(`/api/listings?before=${oldest}&limit=300`);
+        for (const l of listings) if (!state.listings.has(l.id)) state.listings.set(l.id, l);
+        if (listings.length < 300) state.exhausted = true;
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+    renderGrid();
+  });
+
+  for (const b of $$('.tab')) {
+    b.addEventListener('click', () => {
+      state.view.tab = b.dataset.tab;
+      state.limit = PAGE;
+      renderGrid();
+    });
+  }
+  $('#q').addEventListener(
+    'input',
+    debounce((e) => {
+      state.view.q = e.target.value;
+      state.limit = PAGE;
+      renderGrid();
+    }, 120),
+  );
+
+  // Delegated clicks across the page.
+  document.addEventListener('click', async (e) => {
+    if (modal.contains(e.target)) return;
+    const actEl = e.target.closest('[data-act]');
+    const card = e.target.closest('.card');
+    const watchEl = e.target.closest('.watch');
+    const act = actEl?.dataset.act;
+
+    if (act === 'add') return openWatchForm();
+    if (act === 'settings') return openSettings();
+    if (act === 'connect') return connectFacebook();
+    if (act === 'clear-filter') {
+      state.view.watchId = null;
+      renderGrid();
+      renderWatches();
+      return;
+    }
+    if (act === 'hide-demo') {
+      state.prefs.demoNoteHidden = true;
+      savePrefs();
+      renderBanner();
+      return;
+    }
+    if (act === 'resume') {
+      try {
+        await api('/api/resume', { method: 'POST' });
+        toast('Checking again now.');
+      } catch (ex) {
+        toast(ex.message, 'error');
+      }
+      return;
+    }
+
+    if (card) {
+      const l = state.listings.get(card.dataset.id);
+      if (!l) return;
+      if (act === 'open') {
+        if (state.fresh.delete(l.id)) {
+          setTimeout(() => {
+            renderGrid();
+            renderWatches();
+          }, 300);
+        }
+        return; // let the link open
+      }
+      if (act === 'save' || act === 'hide') {
+        e.preventDefault();
+        const patch = act === 'save' ? { saved: !l.saved } : { hidden: true };
+        Object.assign(l, patch);
+        renderGrid();
+        renderWatches();
+        try {
+          await api(`/api/listings/${l.id}`, { method: 'POST', body: patch });
+          if (act === 'hide') {
+            toast('Listing hidden.', 'ok', {
+              action: 'Undo',
+              onAction: async () => {
+                l.hidden = false;
+                renderGrid();
+                renderWatches();
+                await api(`/api/listings/${l.id}`, { method: 'POST', body: { hidden: false } }).catch(() => {});
+              },
+            });
+          }
+        } catch (ex) {
+          toast(ex.message, 'error');
+        }
+      }
+      return;
+    }
+
+    if (watchEl) {
+      const w = watchById(watchEl.dataset.id);
+      if (!w) return;
+      if (act === 'toggle') return; // handled by the change event
+      if (e.target.closest('.switch')) return;
+      if (act === 'scan') {
+        state.pendingScan.set(w.id, Date.now());
+        renderWatches();
+        try {
+          await api(`/api/watches/${w.id}/scan`, { method: 'POST' });
+        } catch (ex) {
+          state.pendingScan.delete(w.id);
+          toast(ex.message, 'error');
+          renderWatches();
+        }
+        return;
+      }
+      if (act === 'edit') return openWatchForm(w);
+      state.view.watchId = state.view.watchId === w.id ? null : w.id;
+      state.limit = PAGE;
+      renderGrid();
+      renderWatches();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const watchEl = e.target.closest?.('.watch');
+    if (watchEl && (e.key === 'Enter' || e.key === ' ') && e.target === watchEl) {
+      e.preventDefault();
+      watchEl.click();
+    }
+  });
+
+  $('#watches').addEventListener('change', async (e) => {
+    if (e.target.dataset.act !== 'toggle') return;
+    const w = watchById(e.target.closest('.watch').dataset.id);
+    if (!w) return;
+    try {
+      const saved = await api(`/api/watches/${w.id}`, { method: 'PUT', body: { enabled: e.target.checked } });
+      Object.assign(w, saved);
+      renderWatches();
+      toast(saved.enabled ? `“${w.name}” is on.` : `“${w.name}” is paused.`);
+    } catch (ex) {
+      toast(ex.message, 'error');
+      e.target.checked = !e.target.checked;
+    }
+  });
+}
+
+// ---------------------------------------------------------------- start
+bindEvents();
+loadState()
+  .then(connectEvents)
+  .catch((e) => {
+    $('#empty').hidden = false;
+    $('#empty').innerHTML = `<div class="empty-small"><b>Can't reach FlipRadar</b>${esc(e.message)}. Is the app still running in its terminal window?</div>`;
+    setTimeout(() => location.reload(), 5000);
+  });
+setInterval(() => {
+  renderLive();
+  if (state.watches.length) {
+    // Keep the per-watch countdowns ticking without rebuilding everything every second.
+    for (const el of $$('.watch')) {
+      const w = watchById(el.dataset.id);
+      const st = el.querySelector('.watch-status');
+      if (w && st) st.outerHTML = watchStatus(w);
+    }
+  }
+}, 1000);
+setInterval(refreshAges, 30000);

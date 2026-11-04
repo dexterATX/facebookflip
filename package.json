@@ -1,0 +1,19 @@
+{
+  "name": "facebookflip",
+  "version": "1.0.0",
+  "description": "FlipRadar: see new Facebook Marketplace listings within minutes of posting, with instant phone alerts.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node tools/demo.js",
+    "test": "node --test",
+    "setup-browser": "playwright-core install chromium"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  }
+}

@@ -1,0 +1,55 @@
+// Try FlipRadar without touching Facebook: runs the app against a pretend
+// Marketplace that keeps posting new listings every minute or so.
+//
+//   npm run demo   ->   http://localhost:3000
+
+import path from 'node:path';
+import { MockFacebook } from './mock-facebook.js';
+import { createApp } from '../src/server.js';
+import { config } from '../src/config.js';
+
+const mock = new MockFacebook({ minAddSec: 20, maxAddSec: 60 });
+let base;
+try {
+  base = await mock.listen(Number(process.env.MOCK_PORT || 3999));
+} catch {
+  base = await mock.listen(0);
+}
+
+const app = await createApp({
+  fbBase: base,
+  dataDir: path.join(config.root, 'data', 'demo'),
+  demo: true,
+  scanGapMs: 2000,
+});
+
+const s = app.store.settings;
+s.engine = 'fast';
+if (!app.store.watches.length) {
+  app.store.addWatch({ name: 'Road & hybrid bikes', query: 'bike', location: 'tampa', minPrice: 50, maxPrice: 900, intervalSec: 60, exclude: ['kids', 'parts'] });
+  app.store.addWatch({ name: 'Couches under $500', query: 'couch', location: 'tampa', maxPrice: 500, intervalSec: 120 });
+  app.store.addWatch({ name: 'PS5', query: 'ps5', location: 'tampa', minPrice: 150, intervalSec: 180, alertMode: 'all' });
+}
+app.store.flush();
+
+await app.listen();
+const url = `http://localhost:${app.config.port}`;
+console.log('');
+console.log(`  FlipRadar DEMO is running  ->  ${url}`);
+console.log('  Listings come from a pretend Marketplace; nothing here touches Facebook.');
+console.log('  Press Ctrl+C to stop.');
+console.log('');
+if (app.config.openBrowser) {
+  const { spawn } = await import('node:child_process');
+  const cmd = process.platform === 'win32' ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
+}
+
+const stop = async () => {
+  await app.close().catch(() => {});
+  await mock.close().catch(() => {});
+  process.exit(0);
+};
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);
