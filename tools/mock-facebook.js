@@ -37,10 +37,10 @@ const CATALOG = {
   iphone: {
     art: 'phone',
     items: [
-      ['iPhone 15 Pro 256GB unlocked', 690],
-      ['iPhone 14 128GB, battery 91%', 410],
-      ['iPhone 13 mini 128GB', 260],
-      ['iPhone 16 Pro Max 512GB', 980],
+      ['iPhone 15 Pro 256GB unlocked', 520],
+      ['iPhone 14 128GB, battery 91%', 310],
+      ['iPhone 13 mini 128GB', 230],
+      ['iPhone 16 Pro Max 512GB', 820],
     ],
   },
   ps5: {

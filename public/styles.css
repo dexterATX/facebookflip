@@ -528,6 +528,18 @@ details.more > .inner { padding: 0 0 14px; display: flex; flex-direction: column
 .reasons .r-warn svg { color: var(--warn); }
 .reasons .r-good svg { color: var(--accent); }
 .reasons .r-info svg { color: var(--muted); }
+.guide-line { display: flex; gap: 9px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 13.5px; color: var(--text-2); }
+.guide-line svg { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--accent); }
+.guide-line a { color: var(--accent); text-underline-offset: 2px; }
+.guide-list { margin-top: 4px; font-size: 13px; }
+.guide-list summary { cursor: pointer; font-weight: 600; color: var(--text-2); padding: 6px 0; }
+.guide-list table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
+.guide-list th { text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 4px 8px 6px 0; border-bottom: 1px solid var(--border); }
+.guide-list td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-2); }
+.guide-list td:nth-child(2) { white-space: nowrap; font-weight: 650; color: var(--text); }
+.guide-list small { color: var(--muted); font-weight: 500; }
+.guide-list .jumpy { color: var(--warn); }
+.guide-list a { color: var(--accent); }
 .ai-box { display: flex; gap: 10px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--violet) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); font-size: 13.5px; color: var(--text-2); }
 .ai-box > svg { color: var(--violet); margin-top: 2px; }
 .ai-box b { color: var(--text); }

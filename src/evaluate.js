@@ -10,9 +10,11 @@
 //      rentals, box-only, scam payment wording. Negations like "not broken"
 //      don't count.
 //   2. Resale value: your own number for the watch if you gave one; otherwise
-//      what similar listings ask (titles sharing words beyond the search
-//      words), discounted to what things actually sell for after haggling;
-//      optionally checked by an AI second opinion.
+//      the built-in price guide (recent used sale prices for popular items,
+//      src/data/price-guide.json) and what similar listings ask (titles
+//      sharing words beyond the search words, discounted to what things
+//      actually sell for after haggling). When those two disagree, the lower
+//      one wins. Optionally checked by an AI second opinion.
 //   3. Profit: resale - price - selling fees (eBay ~13.6% + $0.40 + shipping,
 //      or none for local) - your other costs (gas, cleaning, time).
 //   4. Verdict: a deal needs enough profit, enough margin, no blocking red
@@ -20,6 +22,7 @@
 
 import { norm, titleWords, quantile } from './deals.js';
 import { median, clamp } from './util.js';
+import { matchGuide } from './priceguide.js';
 
 // eBay's final value fee for most categories. Published figures in 2026 range
 // from 12.9% to 13.6% plus a per-order fee; we use the higher one to stay
@@ -33,12 +36,26 @@ export const DEFAULT_DEAL_RULES = {
   otherCosts: 10, // gas, cleaning, your time, per flip
   askToSalePct: 90, // Marketplace asking prices usually sell a bit lower
   readDetails: true, // open the full listing (description, condition) for possible deals
+  priceGuide: true, // use the built-in price guide for items it knows
 };
+
+// After this many days the guide's prices count as old: they can still be
+// used, but never alone for an alert.
+export const GUIDE_STALE_DAYS = 180;
+
+// Seller-stated condition vs. a typical used one. A rule of thumb, not data:
+// fair or poor items sell for less than the averages the estimates come from.
+const CONDITION_CUT = [
+  [/poor/i, 0.3],
+  [/fair/i, 0.15],
+];
 
 const CONF = ['low', 'medium', 'high'];
 const raise = (c) => CONF[Math.min(2, CONF.indexOf(c) + 1)];
 const lower = (c) => CONF[Math.max(0, CONF.indexOf(c) - 1)];
 const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
+const an = (s) => (/^[aeiou]|^x/i.test(s) ? 'an' : 'a'); // "an iPhone", "an Xbox", "a PlayStation"
+const shortDate = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
 // ---------------------------------------------------------------------------
 // Red flags
@@ -55,7 +72,10 @@ const FLAG_RULES = [
   ['block', 'fake', 'Possible replica', ['replica', 'rep', '1to1', 'aaa quality', 'dupe', 'knockoff', 'knock off', 'not authentic', 'unauthentic', 'fake', 'counterfeit']],
   ['block', 'notsale', 'Rent, lease or payment plan, not a sale price', ['for rent', 'for lease', 'lease takeover', 'take over lease', 'take over payments', 'rent to own', 'per month', 'monthly payment', 'monthly payments', 'down payment', 'trade only']],
   ['block', 'accessory', 'Accessory or box only', ['box only', 'empty box', 'case only', 'cover only', 'manual only', 'stand only', 'skin only', 'controller only', 'remote only', 'charger only', 'cable only', 'just the box', 'only the box']],
-  ['warn', 'scamtalk', 'Payment or shipping wording common in scams', ['zelle', 'cash app', 'cashapp', 'venmo only', 'paypal friends', 'friends and family', 'deposit', 'shipping only', 'ship only', 'pay first', 'gift card', 'western union', 'wire transfer', 'crypto']],
+  // Money up front or no meeting: how most Marketplace scams work.
+  ['warn', 'scamtalk', 'Deposit, pay-first or ship-only wording, common in scams', ['paypal friends', 'friends and family', 'deposit', 'shipping only', 'ship only', 'pay first', 'gift card', 'western union', 'wire transfer', 'crypto']],
+  // Payment apps alone are common with honest sellers too; they only matter when the price is too good.
+  ['warn', 'paytalk', 'Asks for app payment (Zelle, Cash App, Venmo)', ['zelle', 'cash app', 'cashapp', 'venmo only']],
   ['warn', 'carrier', 'Carrier-locked phone', ['carrier locked', 'sim locked', 'network locked']],
   ['warn', 'wear', 'Has wear or missing pieces', ['as is', 'scratches', 'scratched', 'dent', 'dented', 'dents', 'stain', 'stained', 'stains', 'tear', 'torn', 'missing', 'no charger', 'needs battery', 'needs work', 'chipped', 'cracked', 'crack', 'cracks', 'damage', 'damaged', 'fair condition', 'rough']],
   ['warn', 'inspired', '"Inspired" / unbranded version', ['inspired', 'unbranded', 'off brand']],
@@ -122,27 +142,65 @@ export function findFlags(title, description = '', searchWords = []) {
 // ---------------------------------------------------------------------------
 // Resale value from similar listings
 
+// Small numbers that count things ("2 controllers") rather than name a model.
+const COUNTED = new Set(['controllers', 'games', 'pieces', 'pcs', 'items', 'chairs', 'pack', 'packs', 'sets', 'boxes', 'bags', 'tickets', 'pairs', 'pair', 'lot', 'lots', 'units', 'cases', 'discs', 'drawers', 'seats']);
+const STOPISH = new Set(['with', 'and', 'for', 'the', 'of', 'to', 'in', 'on', 'or', 'plus', 'only', 'size', 'qty', 'x']);
+
 /**
- * Estimates what this item resells for, from prices of similar listings.
- * `pool` is [{ id, title, price }] of listings seen recently.
+ * The model number in a title: the first word followed by a small number,
+ * like "iphone 14", "fx 2" or "kivik 3". "iPhone 14" and "iPhone 13" are
+ * different items even though their titles share most words.
  */
-/** Listings in `pool` whose titles share meaningful words with this one (beyond the search words). */
+export function modelNumber(title) {
+  const t = norm(title).trim().split(' ');
+  for (let i = 0; i + 1 < t.length; i++) {
+    if (/^[a-z]{2,}$/.test(t[i]) && !STOPISH.has(t[i]) && /^\d{1,2}$/.test(t[i + 1]) && !COUNTED.has(t[i + 2])) return [t[i], t[i + 1]];
+  }
+  return null;
+}
+
+// Price guide model for a title, remembered (the same titles come up again and again).
+const guideIds = new Map();
+function guideId(title) {
+  if (!guideIds.has(title)) {
+    if (guideIds.size > 20000) guideIds.clear();
+    guideIds.set(title, matchGuide(title)?.id ?? null);
+  }
+  return guideIds.get(title);
+}
+
+/**
+ * Listings in `pool` that are the same kind of item: their titles share
+ * meaningful words with this one (beyond the search words), they don't name
+ * a different model number, and, for items the price guide knows, they are
+ * the same model ("iPhone 14" is not compared with "iPhone 13 mini").
+ */
 export function similarComps(listing, pool, searchWords = []) {
   const skip = new Set(searchWords.flatMap((w) => [...titleWords(w)]));
   const minus = (set) => new Set([...set].filter((w) => !skip.has(w)));
   const mine = minus(titleWords(listing.title));
   if (!mine.size) return [];
-  return pool.filter((o) => {
+  const myModel = modelNumber(listing.title);
+  const out = pool.filter((o) => {
     if (o.id === listing.id || !(o.price > 1)) return false;
     const theirs = minus(titleWords(o.title));
     let shared = 0;
     for (const w of mine) if (theirs.has(w)) shared++;
     // Two words in common, or at least half of this (short) title's words.
-    return shared >= 2 || (shared >= 1 && shared / mine.size >= 0.5);
+    if (!(shared >= 2 || (shared >= 1 && shared / mine.size >= 0.5))) return false;
+    const theirModel = myModel && modelNumber(o.title);
+    return !(theirModel && theirModel[0] === myModel[0] && theirModel[1] !== myModel[1]);
   });
+  const g = guideId(listing.title);
+  return g ? out.filter((o) => guideId(o.title) === g) : out;
 }
 
-export function compsEstimate(listing, pool, { searchWords = [], askToSalePct = DEFAULT_DEAL_RULES.askToSalePct } = {}) {
+/**
+ * Estimates what this item resells for, from prices of similar listings.
+ * `pool` is [{ id, title, price }] of listings seen recently. With
+ * `wholeSearch: false`, only true look-alikes count (not the whole search).
+ */
+export function compsEstimate(listing, pool, { searchWords = [], askToSalePct = DEFAULT_DEAL_RULES.askToSalePct, wholeSearch = true } = {}) {
   const others = pool.filter((o) => o.id !== listing.id && o.price > 1);
 
   let basis = null;
@@ -156,7 +214,7 @@ export function compsEstimate(listing, pool, { searchWords = [], askToSalePct = 
       kind = 'similar';
     }
   }
-  if (!basis && others.length >= 8) {
+  if (!basis && wholeSearch && others.length >= 8) {
     // Not enough look-alikes: the whole search only counts if its prices are tightly grouped.
     const xs = others.map((o) => o.price).sort((a, b) => a - b);
     const med = median(xs);
@@ -193,28 +251,41 @@ export function compsEstimate(listing, pool, { searchWords = [], askToSalePct = 
  * @param ctx.pool      recent listings [{id,title,price}] for comparisons
  * @param ctx.details   { description, condition } from the full listing, if read
  * @param ctx.ai        AI second opinion, if any
+ * @param ctx.now       current time (for the price guide's age)
  */
-export function evaluate(listing, { watch = {}, rules = {}, pool = [], details = null, ai = null } = {}) {
+export function evaluate(listing, { watch = {}, rules = {}, pool = [], details = null, ai = null, now = Date.now() } = {}) {
   const r = { ...DEFAULT_DEAL_RULES, ...rules };
   const searchWords = [watch.query || '', ...(watch.include || [])];
   const flags = findFlags(listing.title, details?.description || '', searchWords);
-  if (details?.condition && /fair|poor|parts/i.test(details.condition)) {
-    flags.push({ kind: 'warn', code: 'condition', text: `Seller lists the condition as "${details.condition}"` });
+  const condition = details?.condition || '';
+  const cut = CONDITION_CUT.find(([re]) => re.test(condition))?.[1] || 0;
+  if (condition && /fair|poor|parts/i.test(condition)) {
+    flags.push({ kind: 'warn', code: 'condition', text: `Seller lists the condition as "${condition}"${cut ? `: counted ${Math.round(cut * 100)}% lower (rule of thumb)` : ''}` });
   }
   const notes = [];
 
   const price = listing.price ?? null;
 
+  // What the price guide says this is, if it knows.
+  const guide = r.priceGuide === false ? null : matchGuide(listing.title, { now });
+  const guideRef = guide ? `${guide.sourceName}, ${shortDate(guide.asOf)}` : '';
+  const guideInfo = guide ? { label: guide.label, price: guide.price, source: guide.sourceName, basis: guide.basis, url: guide.url, asOf: guide.asOf } : null;
+  const fromGuide = (confidence) => ({ value: guide.price, low: guide.price, high: guide.price, confidence, basis: `price guide: ${guide.label}, ${guideRef}`, from: 'guide', guide: guideInfo });
+
   // Resale value
   let est = null;
   if (watch.resaleValue > 0) {
-    est = { value: watch.resaleValue, low: watch.resaleValue, high: watch.resaleValue, confidence: 'high', basis: 'your resale price for this watch' };
+    est = { value: watch.resaleValue, low: watch.resaleValue, high: watch.resaleValue, confidence: 'high', basis: 'your resale price for this watch', from: 'user' };
     // A watch-wide price can't fit everything a search turns up (a $45 controller
-    // in a PS5 search). If look-alikes clearly sell for much less, trust them.
+    // or a PS4 in a PS5 search). If the guide or look-alikes clearly put this
+    // item much lower, trust them.
     const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct });
     const confirmed = c.value && c.confidence !== 'low';
-    if (confirmed && c.askMedian < watch.resaleValue * 0.5) {
-      est = { value: c.value, low: c.low, high: c.high, confidence: c.confidence, basis: `${c.n} similar listings (asking ~${money(c.askMedian)})` };
+    if (guide && !guide.volatile && guide.price < watch.resaleValue * 0.6) {
+      est = fromGuide('medium');
+      notes.push({ kind: 'warn', code: 'mismatch', text: `This looks like ${an(guide.label)} ${guide.label}, which sells for about ${money(guide.price)} used (${guideRef}): far below your ${money(watch.resaleValue)} resale price for this watch, so the guide price is used` });
+    } else if (confirmed && c.askMedian < watch.resaleValue * 0.5) {
+      est = { value: c.value, low: c.low, high: c.high, confidence: c.confidence, basis: `${c.n} similar listings asking ~${money(c.askMedian)}`, from: 'comps' };
       notes.push({ kind: 'warn', code: 'mismatch', text: `Similar listings ask ~${money(c.askMedian)}, far below your ${money(watch.resaleValue)} resale price: this is probably an accessory or a different model` });
     } else if (!confirmed && price !== null && price < watch.resaleValue * 0.35) {
       // Way under your number with nothing to confirm it's the same item: more
@@ -227,19 +298,59 @@ export function evaluate(listing, { watch = {}, rules = {}, pool = [], details =
         text: `Priced at ${Math.round((price / watch.resaleValue) * 100)}% of your ${money(watch.resaleValue)} resale price, and no similar listings confirm it's the same item. It could be an accessory, a different model, or a scam.`,
       });
     }
+    // Shown next to your number for reference (the dashboard links the source).
+    if (guide && est.from === 'user') est.guide = guideInfo;
   } else {
-    const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct });
-    if (c.value) {
-      est = {
-        value: c.value,
-        low: c.low,
-        high: c.high,
-        confidence: c.confidence,
-        basis: c.kind === 'similar' ? `${c.n} similar listings (asking ~${money(c.askMedian)})` : `${c.n} listings in this search (asking ~${money(c.askMedian)})`,
-      };
+    // For a model the guide knows, only the same model counts, not the whole search.
+    const c = compsEstimate(listing, pool, { searchWords, askToSalePct: r.askToSalePct, wholeSearch: !guide });
+    const compsOk = Boolean(c.value) && c.confidence !== 'low';
+    const compsBasis = c.value && (c.kind === 'similar' ? `${c.n} similar listings asking ~${money(c.askMedian)}` : `${c.n} listings in this search asking ~${money(c.askMedian)}`);
+    if (guide) {
+      // Sale prices for this exact model. Alone it's medium confidence; local
+      // listings that agree make it high; when they disagree, the lower wins.
+      est = fromGuide(guide.volatile ? 'low' : 'medium');
+      if (compsOk) {
+        const ratio = c.value / guide.price;
+        if (ratio >= 0.8 && ratio <= 1.25) {
+          const value = Math.min(guide.price, c.value);
+          const basis = value === guide.price ? `${est.basis}; local listings agree` : `${compsBasis}, in line with the price guide's ${money(guide.price)}`;
+          est = { ...est, value, low: Math.min(c.low, value), high: Math.max(c.high, value), confidence: guide.volatile ? 'medium' : 'high', basis, from: 'guide+comps' };
+          notes.push({ kind: 'good', code: 'guide-agrees', text: `Local listings agree with the price guide: ${compsBasis}` });
+        } else if (c.value < guide.price) {
+          est = { value: c.value, low: c.low, high: c.high, confidence: guide.volatile ? 'low' : 'medium', basis: compsBasis, from: 'comps', guide: guideInfo };
+          notes.push({ kind: 'warn', code: 'guide-local', text: `Local listings ask less (~${money(c.askMedian)}) than ${an(guide.label)} ${guide.label} usually sells for (${money(guide.price)}, ${guideRef}), so the lower local number is used` });
+        } else {
+          notes.push({ kind: 'info', code: 'guide-local', text: `Local listings ask more (~${money(c.askMedian)}) than ${an(guide.label)} ${guide.label} usually sells for, so the lower guide price is used` });
+        }
+      } else if (price !== null && price < guide.price * 0.35) {
+        est.confidence = 'low';
+        notes.push({
+          kind: 'warn',
+          code: 'checkitem',
+          short: 'Far under the price guide: check it is the same item',
+          text: `Priced at ${Math.round((price / guide.price) * 100)}% of what ${an(guide.label)} ${guide.label} usually sells for (${money(guide.price)}), and no local listings confirm it. It could be an accessory, a different model, or a scam.`,
+        });
+      }
+      if (guide.volatile && est.confidence === 'low') notes.push({ kind: 'info', code: 'guide-volatile', short: 'Prices for this item jump around: needs local listings to agree', text: guide.note || 'Prices for this item move a lot, so the guide alone is not enough' });
+    } else if (c.value) {
+      est = { value: c.value, low: c.low, high: c.high, confidence: c.confidence, basis: compsBasis, from: 'comps' };
     } else if (c.n) {
       notes.push({ kind: 'info', code: 'fewcomps', text: `Only ${c.n} similar listing${c.n === 1 ? '' : 's'} seen so far` });
     }
+  }
+
+  if (est && guide && est.from.startsWith('guide') && guide.ageDays > GUIDE_STALE_DAYS) {
+    est.confidence = lower(est.confidence);
+    notes.push({ kind: 'warn', code: 'guide-old', short: 'Price guide is out of date: not sure enough', text: `The price guide is ${Math.round(guide.ageDays / 30)} months old, so prices may have moved. Update it, or set your own resale price for this watch.` });
+  }
+  if (est && guide?.missing) {
+    // Every estimate assumes a complete item.
+    est.confidence = lower(est.confidence);
+    notes.push({ kind: 'warn', code: 'missing', short: `Listed as "${guide.missing}": worth less than a complete one`, text: `Listed as "${guide.missing}": resale prices assume a complete set, so this one is worth less` });
+  }
+  if (est && cut) {
+    const k = 1 - cut;
+    est = { ...est, value: est.value * k, low: est.low * k, high: est.high * k };
   }
 
   // AI second opinion
@@ -255,11 +366,11 @@ export function evaluate(listing, { watch = {}, rules = {}, pool = [], details =
         // Disagreement: trust the lower number and be less sure.
         est.confidence = lower(est.confidence);
         if (mid < est.value) est = { ...est, value: mid, low: ai.low, high: ai.high };
-        notes.push({ kind: 'warn', code: 'ai-disagrees', text: `AI says it resells for ${money(ai.low)}–${money(ai.high)}, which doesn't match similar listings` });
+        notes.push({ kind: 'warn', code: 'ai-disagrees', text: `AI says it resells for ${money(ai.low)}–${money(ai.high)}, which doesn't match ${est.from.startsWith('guide') ? 'the price guide' : 'similar listings'}` });
       }
     } else if (!est) {
       // AI alone is never "high" confidence.
-      est = { value: mid, low: ai.low, high: ai.high, confidence: ai.confidence === 'high' ? 'medium' : 'low', basis: `AI estimate (${ai.item || 'item'})` };
+      est = { value: mid, low: ai.low, high: ai.high, confidence: ai.confidence === 'high' ? 'medium' : 'low', basis: `AI estimate (${ai.item || 'item'})`, from: 'ai' };
     }
     if (ai.condition === 'for parts') flags.push({ kind: 'block', code: 'ai-parts', text: 'AI reads this as for parts / not working' });
     else if (ai.condition === 'poor') flags.push({ kind: 'warn', code: 'ai-poor', text: 'AI reads the condition as poor' });
@@ -294,9 +405,12 @@ export function evaluate(listing, { watch = {}, rules = {}, pool = [], details =
   if (price > 0 && est.value >= 80 && !checkItem) {
     const ratio = price / est.value;
     const scamTalk = flags.some((f) => f.code === 'scamtalk');
+    const payTalk = scamTalk || flags.some((f) => f.code === 'paytalk');
     const off = Math.round((1 - ratio) * 100);
-    if (ratio < 0.12 || (scamTalk && ratio < 0.4)) {
-      flags.push({ kind: 'block', code: 'scam', text: `Likely scam: ${off}% under what it resells for${scamTalk ? ', plus scam-style payment wording' : ''}` });
+    // Deposit / ship-only wording on anything priced like a deal is the classic
+    // scam; payment-app wording only when the price is far too good.
+    if (ratio < 0.12 || (scamTalk && ratio < 0.65) || (payTalk && ratio < 0.4)) {
+      flags.push({ kind: 'block', code: 'scam', text: `Likely scam: ${off}% under what it resells for${payTalk ? ', plus scam-style payment wording' : ''}` });
     } else if (ratio < 0.25) {
       flags.push({ kind: 'warn', code: 'toocheap', text: `${off}% under resale value: could be a scam or a pricing mistake. See it in person before paying.` });
     }
@@ -312,7 +426,7 @@ export function evaluate(listing, { watch = {}, rules = {}, pool = [], details =
   if (verdict === 'deal') headline = `+${money(profit)} profit (${Math.round(margin * 100)}% margin)`;
   else if (blocked) headline = flags.find((f) => f.kind === 'block').text;
   else if (!enoughProfit || !enoughMargin) headline = profit > 0 ? `Only +${money(profit)} profit (${Math.round(margin * 100)}%)` : `Priced above resale (~${money(est.value)})`;
-  else headline = checkItem?.short || 'Looks cheap, but not enough data to be sure';
+  else headline = (checkItem || notes.find((n) => n.short))?.short || 'Looks cheap, but not enough data to be sure';
 
   const weight = { high: 1, medium: 0.85, low: 0.6 }[est.confidence];
   const score = Math.round((clamp(margin, 0, 1) * 70 + clamp(profit / 200, 0, 1) * 30) * weight);
@@ -360,6 +474,8 @@ function finish(e) {
       low: Math.round(e.resale.low),
       high: Math.round(e.resale.high),
       basis: e.resale.basis,
+      from: e.resale.from || null,
+      guide: e.resale.guide || null,
     };
   }
   if (typeof e.profit === 'number') {

@@ -74,6 +74,7 @@ const state = {
   view: { tab: 'deals', watchId: null, q: '' },
   accuracy: null,
   ai: null,
+  priceGuide: null,
   limit: PAGE,
   fresh: new Map(), // id -> arrival time (for the "NEW" glow)
   pendingScan: new Map(), // watch id -> when 'Check now' was pressed
@@ -713,6 +714,7 @@ async function loadState() {
   state.demo = Boolean(s.demo);
   state.junkWords = s.junkWords || [];
   state.intervals = s.intervals || state.intervals;
+  state.priceGuide = s.priceGuide || null;
   state.listings = new Map(s.listings.map((l) => [l.id, l]));
   state.exhausted = s.listings.length < 400;
   renderAll();
@@ -767,7 +769,31 @@ async function vote(l, kind) {
   }
 }
 
+const guideDate = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+
+function guideSettings(s, sw) {
+  const g = state.priceGuide;
+  if (!g) return '';
+  const rows = g.items
+    .map((i) => {
+      const more = i.variants.map((v) => `${v.size}: ${money(Math.round(v.price))}`).join(', ');
+      return `<tr><td>${esc(i.name)}${i.size ? ` <small>${esc(i.size)}</small>` : ''}${i.volatile ? ' <small class="jumpy">jumpy, needs local proof</small>' : ''}</td><td>${money(Math.round(i.price))}${more ? `<br><small>${esc(more)}</small>` : ''}</td><td><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener noreferrer">${esc(i.source)}</a></td></tr>`;
+    })
+    .join('');
+  return `<div class="toggle-line"><div class="txt"><b>Use the built-in price guide</b><small>Recent used sale prices for ${g.items.length} popular flips (consoles, iPhones, Steam Deck, Quest, iPad, AirPods Max), collected ${esc(guideDate(g.asOf))}. Checked against local listings; when they disagree, the lower number is used.</small></div>${sw('deals.priceGuide', s.deals.priceGuide !== false)}</div>
+        <details class="guide-list"><summary>See the price list</summary>
+          <table><thead><tr><th>Item</th><th>Sells for</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>
+          <p class="hint">${g.sources.map((x) => `${esc(x.name)}: ${esc(x.basis)}`).join(' · ')}. Base storage size unless noted; bigger sizes usually sell for more, so these are on the safe side.</p>
+        </details>`;
+}
+
 const REASON_ICON = { block: ['x', 'r-block'], warn: ['alert', 'r-warn'], good: ['check', 'r-good'], info: ['info', 'r-info'] };
+
+function guideLine(g) {
+  if (!g) return '';
+  const url = safeUrl(g.url);
+  return `<p class="guide-line">${icon('info')}<span>Price guide: ${/^[aeiou]|^x/i.test(g.label) ? 'an' : 'a'} ${esc(g.label)} sells for about <b>${money(Math.round(g.price))}</b> used (${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(g.source)}</a>` : esc(g.source)}, ${esc(g.basis)}, ${esc(guideDate(g.asOf))})</span></p>`;
+}
 
 function openWhy(l) {
   if (!l) return;
@@ -814,10 +840,11 @@ function openWhy(l) {
           ${e.confidence ? `<span class="conf-tag ${esc(e.confidence)}">${esc(e.confidence)} confidence</span>` : ''}</div>
       </div>
       ${math.length ? `<table class="why-math">${math.join('')}</table>` : ''}
+      ${guideLine(e.resale?.guide)}
       <ul class="reasons">${reasons}</ul>
       ${aiBlock}
       ${desc}
-      <p class="hint">Estimates come from asking prices of similar listings, adjusted down to what things usually sell for. They're a guide, not a promise: check the listing before you buy.</p>
+      <p class="hint">Estimates come from recent used sale prices (the price guide) and asking prices of similar listings, adjusted down to what things usually sell for. They're a guide, not a promise: check the listing before you buy.</p>
     </div>
     <div class="m-foot">
       <button class="btn btn-sm ${l.feedback === 'good' ? 'btn-primary' : ''}" data-why="good">${icon('up')}Good deal</button>
@@ -1078,6 +1105,7 @@ function openSettings() {
         </div>
         <small class="hint">Marketplace prices are asking prices; buyers usually haggle them down. 90% is a cautious default.</small>
         <div class="toggle-line"><div class="txt"><b>Read the full listing for possible deals</b><small>Checks the description and condition for problems ("doesn't turn on", "Zelle only") before alerting. One extra page load per possible deal.</small></div>${sw('deals.readDetails', s.deals.readDetails)}</div>
+        ${guideSettings(s, sw)}
       </section>
 
       <section class="section" id="ai-box"></section>

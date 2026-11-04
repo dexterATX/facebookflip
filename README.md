@@ -19,6 +19,7 @@ FlipRadar watches the Marketplace searches you care about, newest first. Every n
   - Ignores old listings that Facebook bumps back to the top. It reads each listing's real posting time.
   - Never alerts twice for the same listing, even if two searches find it.
 - **Deal checking.** Every listing gets an estimated resale price, profit and margin, plus a plain reason. Possible deals get a closer look at the full listing before you're alerted. See [How it decides what's a deal](#how-it-decides-whats-a-deal).
+- **Built-in price guide.** Recent used sale prices for 35 popular flips (PlayStation, Xbox, Switch, Steam Deck, Meta Quest, iPhone 13–16, Galaxy S24 Ultra, iPad, AirPods Max), each with its source and date. Those items can be judged from the very first listing, with no price history needed.
 - **Two piles, nothing lost.** **Deals** alert you. **Unsorted** keeps everything else with its reason, like "only +$12 profit" or "for parts (doesn't turn on)". 👍/👎 any listing to move it, and FlipRadar keeps score of how often it was right.
 - **Optional AI second opinion.** With your own Anthropic API key, Claude identifies the exact item, reads the condition and photo, and estimates what it really sells for. It only checks possible deals, with a daily cap.
 - **Gentle on Facebook.** It runs one check at a time with randomized timing, backs off automatically, and pauses everything if Facebook pushes back instead of hammering it. Optional quiet hours overnight.
@@ -61,23 +62,50 @@ That's it. New listings appear on the dashboard and on your phone.
 
 Resellers judge a flip by what an item actually **sells** for, minus every cost. FlipRadar does the same, in four steps:
 
-1. **Red flags first.** "For parts", "doesn't turn on", iCloud-locked, "ISO"/wanted posts, replicas, rentals and payment plans, box-only listings, and scam wording ("Zelle only", "shipping only", deposits). Negations don't count: "not broken" and "no scratches" are fine.
+1. **Red flags first.** "For parts", "doesn't turn on", iCloud-locked, "ISO"/wanted posts, replicas, rentals and payment plans, box-only listings, and scam wording (deposits, "shipping only", "pay first", "Zelle only"). Negations don't count: "not broken" and "no scratches" are fine.
 2. **What it resells for.** In order of trust:
-   - **Your number.** Set "Resells for about" on a watch, and FlipRadar uses it. Exception: if similar listings show the item sells for far less (a $45 controller in a PS5 search), it trusts those instead.
+   - **Your number.** Set "Resells for about" on a watch, and FlipRadar uses it. Exceptions: if the item is clearly something cheaper (a PS4 Pro in a PS5 search, per the price guide) or similar listings sell for far less (a $45 controller), it trusts those instead.
+   - **The price guide.** For the [popular items it knows](#the-price-guide), what they actually sold for used, recently. It's strict about matching: "PS5 controller", "case for iPhone 15" and "iPhone 16e" get no guide price.
    - **Similar listings.** FlipRadar remembers 30 days of prices. It compares each listing with ones whose titles share real words beyond your search words, so controllers are compared with controllers, not consoles. Marketplace prices are *asking* prices, so it assumes items sell for 90% of asking (adjustable).
-   - **The optional AI**, cross-checked against the above. When the AI and similar listings disagree, FlipRadar uses the lower number and marks the call less certain.
+   - **Both together.** When local listings agree with the guide, the call is high confidence. When they disagree, FlipRadar uses the **lower** number. Local prices are often lower than national ones, and that's what you'll actually get.
+   - **The optional AI**, cross-checked against the above. When the AI disagrees, FlipRadar uses the lower number and marks the call less certain.
+   - **Condition.** A seller-listed "Used – fair" counts 15% lower, "poor" 30% lower. That's a rule of thumb, not data. Listings missing what normally comes with the item ("no controller", "tablet only") are marked less certain.
 3. **Profit.** Resale − asking price − selling fees − your other costs (gas, cleaning, time; $10 by default). Selling locally has no fees. eBay is counted at 13.6% + $0.40 per sale + the shipping you enter. Published 2026 figures range from 12.9% to 13.6%, so check your own fees in eBay Seller Hub.
 4. **Verdict.** It's a **deal** only if the profit is at least $40 **and** at least 25% of the resale price, nothing blocks it, and the estimate is at least medium confidence. All of these are adjustable in Settings. Anything unsure goes to **Unsorted** with the reason.
 
 **Before alerting about a possible deal**, FlipRadar opens the full listing to read the description and condition, since problems often show up only there. With the AI on, Claude takes a look too. Deal alerts go out right after, usually within seconds.
 
-**Too good to be true?** A price under about 12% of resale value is treated as a likely scam, and so is under 40% with scam-style payment wording. Between 12% and 25% it's still allowed as a deal, with a "see it in person before paying" warning. If something is far under *your* resale price and no similar listings confirm it's the same item, it goes to Unsorted as "check it is the same item".
+**Too good to be true?** These count as likely scams and never alert:
+
+- a price under about 12% of resale value;
+- a deposit, "pay first" or "shipping only" request on anything priced like a deal (under 65% of resale);
+- "Zelle / Cash App only" at under 40% of resale. (Payment apps alone are normal with honest sellers.)
+
+Between 12% and 25% of resale it can still be a deal, with a "see it in person before paying" warning. If something is far under *your* resale price or the guide price and no local listings confirm it's the same item, it goes to Unsorted as "check it is the same item".
 
 **How accurate is it?** It's a careful estimate, not a guarantee:
 
-- On day one there's little price history, so expect more "not enough price info" in Unsorted. It gets sharper as listings come in.
-- For the most accurate calls from the start, give each watch a "resells for" price, or turn on the AI.
+- **Items in the price guide** can be judged from the first listing. For everything else, there's little price history on day one, so expect more "not enough price info" in Unsorted. It gets sharper as listings come in.
+- For the most accurate calls on other items, give each watch a "resells for" price, or turn on the AI.
+- **A labeled test set** of 71 realistic listings (deals, fair prices, accessories, broken and locked items, scams, missing parts, unknown models) checks the rules. Run `npm run accuracy` for the report. Currently: 70 of 71 right, **0 false alarms**, 1 missed deal on purpose (a PS5 sold without its controller, kept in Unsorted because it's worth less than a complete one). These are hand-written examples, so they show the rules work as designed, not real-world accuracy.
 - Use 👍/👎 on listings. FlipRadar shows how often its deals were right, so you can see whether to tighten your rules.
+
+### The price guide
+
+Used sale prices collected **November 4, 2026**, stored with their sources in [`src/data/price-guide.json`](src/data/price-guide.json). Settings → Deal rules has the full list and an on/off switch.
+
+| Items | Source | Price used |
+| --- | --- | --- |
+| PlayStation 5 (original, Slim, Pro), PlayStation 4 (original, Slim, Pro), Xbox Series X and S, Nintendo Switch (original, OLED, Lite, Switch 2) | [PriceCharting](https://www.pricecharting.com/) | "Loose" (used, no box), from completed eBay sales |
+| iPhone 13–16 (base, Pro, Pro Max), Galaxy S24 Ultra, Steam Deck (LCD, OLED), Meta Quest 2 / 3 / 3S, iPad 9th and 10th gen, AirPods Max | [Swappa](https://swappa.com/prices) | Average sale price, base storage size |
+
+Good to know:
+
+- **Prices are national, online sale prices.** Local Marketplace prices are often lower; when local listings disagree, the lower number wins.
+- **Base storage only** for phones and tablets, so bigger sizes are underestimated. That's the safe direction.
+- **PS5 Pro** used prices were unusually high and jumpy in late 2026, so the guide alone never makes a PS5 Pro a deal: local listings have to agree.
+- **Not covered yet:** MacBooks, AirPods Pro, game controllers, graphics cards, Dyson, KitchenAid and anything else. Those use your own number, similar listings, or the AI.
+- **Prices drift.** After 6 months the guide counts as old and can't trigger an alert on its own. To refresh it, update the `price` numbers and `asOf` date in the file from the source links, then restart.
 
 ### AI second opinion (optional)
 
@@ -155,24 +183,26 @@ While the dashboard is open, it also plays a sound and can show desktop notifica
 - **Reading listings:** Facebook embeds the first page of results as JSON (structured data) inside the page. Instead of trusting one fixed path through that data, FlipRadar walks all of it and keeps every object shaped like a listing: one with an `id` and a `marketplace_listing_title`. It skips sponsored stories. In browser mode, it also reads Facebook's own data responses, and as a last resort the visible listing cards. See `src/facebook/extract.js`.
 - **Fast mode** sends the same headers Chrome sends when opening a page, and keeps Facebook's guest cookie like a returning visitor (`src/facebook/http.js`). **Browser mode** drives your installed Chrome or Edge with its own profile (`src/facebook/browser.js`).
 - **New vs. old:** the first check of a watch is a quiet baseline. After that, a listing alerts if FlipRadar hasn't seen it before *and* it was posted within your alert window, 60 minutes by default (`src/monitor.js`).
-- **Deals:** red flags, resale estimate, profit math and the verdict live in `src/evaluate.js`. The closer look (full listing, then AI) runs in `src/monitor.js`, and the optional AI is in `src/ai.js`.
+- **Deals:** red flags, resale estimate, profit math and the verdict live in `src/evaluate.js`. The price guide matcher is `src/priceguide.js`. The closer look (full listing, then AI) runs in `src/monitor.js`, and the optional AI is in `src/ai.js`.
 
 ```text
 src/
   server.js          web server, JSON API, live updates (Server-Sent Events)
   monitor.js         scheduler: timing, backoff, new-listing detection, alerts
   evaluate.js        the deal check: red flags, resale estimate, profit, verdict
+  priceguide.js      matches a listing to the price guide (strictly)
+  data/              price-guide.json: used sale prices, sources, dates
   ai.js              optional AI second opinion (Claude)
   deals.js           your filters and text helpers
   notify.js          ntfy, Discord, Telegram
   store.js           saves everything to data/db.json
   facebook/          links, page reading, fast mode, browser mode
 public/              the dashboard (plain HTML, CSS and JavaScript)
-tools/               pretend Marketplace + demo
-test/                automated tests
+tools/               pretend Marketplace, demo, accuracy report
+test/                automated tests; fixtures/ holds the labeled test set
 ```
 
-Run the tests with `npm test`. They include a full run against the pretend Marketplace and, when Chrome or Chromium is installed, the real browser mode.
+Run the tests with `npm test`. They include a full run against the pretend Marketplace, the labeled accuracy set, and, when Chrome or Chromium is installed, the real browser mode. `npm run accuracy` prints the accuracy report.
 
 ---
 

@@ -30,6 +30,8 @@ if (!app.store.watches.length) {
   app.store.addWatch({ name: 'Couches under $500', query: 'couch', location: 'tampa', maxPrice: 500, intervalSec: 120 });
   // This one shows the most accurate setup: you tell FlipRadar what it resells for.
   app.store.addWatch({ name: 'PS5', query: 'ps5', location: 'tampa', intervalSec: 180, resaleValue: 380 });
+  // No resale price set: the built-in price guide prices the models it knows.
+  app.store.addWatch({ name: 'iPhones', query: 'iphone', location: 'tampa', intervalSec: 120 });
 }
 app.store.flush();
 

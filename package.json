@@ -11,6 +11,7 @@
     "start": "node src/server.js",
     "demo": "node tools/demo.js",
     "test": "node --test",
+    "accuracy": "node tools/accuracy.js",
     "setup-browser": "playwright-core install chromium"
   },
   "dependencies": {

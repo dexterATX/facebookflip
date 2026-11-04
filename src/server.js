@@ -15,6 +15,7 @@ import { FacebookClient } from './facebook/client.js';
 import { buildSearchUrl, parseMarketplaceUrl } from './facebook/urls.js';
 import { parseCookieInput, hasSession } from './facebook/cookies.js';
 import { JUNK_WORDS } from './deals.js';
+import { guideSummary } from './priceguide.js';
 import { Hub } from './sse.js';
 import { clamp, toNumber, log, isMainModule } from './util.js';
 
@@ -86,6 +87,7 @@ function applySettings(cur, patch) {
     if ('otherCosts' in d) cur.deals.otherCosts = num(d.otherCosts, 0, 10000, 10);
     if ('askToSalePct' in d) cur.deals.askToSalePct = num(d.askToSalePct, 40, 120, 90);
     if ('readDetails' in d) cur.deals.readDetails = Boolean(d.readDetails);
+    if ('priceGuide' in d) cur.deals.priceGuide = Boolean(d.priceGuide);
   }
   if (patch.ai && typeof patch.ai === 'object') {
     const a = patch.ai;
@@ -192,6 +194,7 @@ export async function createApp(overrides = {}) {
     logs: monitor.logs.slice(-80),
     junkWords: JUNK_WORDS,
     intervals: INTERVALS,
+    priceGuide: guideSummary(),
   }));
 
   add('GET', '/api/listings', async ({ query }) => ({

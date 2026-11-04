@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, findFlags, compsEstimate, isCandidate } from '../src/evaluate.js';
+import { evaluate, findFlags, compsEstimate, isCandidate, similarComps, modelNumber } from '../src/evaluate.js';
 import { titleWords } from '../src/deals.js';
 
 // Recent asking prices for a PS5 search: consoles around $400, controllers around $50.
@@ -55,6 +55,10 @@ test('far too cheap is flagged as a likely scam', () => {
   const verify = ev('PS5 disc edition', 80); // 78% under: allowed, but with a warning
   assert.equal(verify.verdict, 'deal');
   assert.ok(verify.flags.some((f) => f.code === 'toocheap'));
+  // Payment apps alone are normal with honest sellers...
+  assert.equal(ev('PS5 disc edition', 220, { details: { description: 'Cash or Zelle at pickup.' } }).verdict, 'deal');
+  // ...but money up front on a deal-level price is the classic scam.
+  assert.match(ev('PS5 disc edition', 220, { details: { description: 'Deposit required to hold it.' } }).headline, /Likely scam/);
 });
 
 test('free items can be deals', () => {
@@ -113,11 +117,12 @@ test('your rules decide: both the profit and the margin bar must be cleared', ()
 
 test('AI agreement raises confidence; disagreement lowers it and uses the lower price', () => {
   const few = pool.filter((c) => c.title.includes('disc')).slice(0, 4); // medium confidence alone
-  const base = evaluate(L('PS5 disc edition', 220), { watch, pool: few });
+  const rules = { priceGuide: false }; // similar listings only, so the AI is the second source
+  const base = evaluate(L('PS5 disc edition', 220), { watch, pool: few, rules });
   assert.equal(base.confidence, 'medium');
   const ai = (low, high, extra = {}) => ({ ok: true, item: 'PS5 Disc', condition: 'good', low, high, confidence: 'high', redFlags: [], verdict: 'good deal', reason: 'Popular console.', model: 'test', ...extra });
-  assert.equal(evaluate(L('PS5 disc edition', 220), { watch, pool: few, ai: ai(340, 380) }).confidence, 'high');
-  const dis = evaluate(L('PS5 disc edition', 220), { watch, pool: few, ai: ai(200, 240) });
+  assert.equal(evaluate(L('PS5 disc edition', 220), { watch, pool: few, rules, ai: ai(340, 380) }).confidence, 'high');
+  const dis = evaluate(L('PS5 disc edition', 220), { watch, pool: few, rules, ai: ai(200, 240) });
   assert.equal(dis.confidence, 'low');
   assert.equal(dis.resale.value, 220);
   assert.equal(dis.verdict, 'unsorted');
@@ -148,4 +153,19 @@ test('comparison helper: needs real look-alikes, trims outliers, reports confide
   assert.equal(Math.round(c.askMedian), 400);
   assert.equal(compsEstimate(L('PS5 VR2 headset', 300), pool, { searchWords: ['ps5'] }).value, null);
   assert.deepEqual([...titleWords('PS5 Disc Edition + 2 controllers, great condition')], ['ps5', 'disc', 'edition', 'controller']);
+});
+
+test('look-alikes must be the same model, not just similar words', () => {
+  const phones = [
+    ...[200, 210, 220, 205].map((p, i) => ({ id: `m${i}`, title: 'iPhone 13 mini 128GB', price: p })),
+    ...[300, 310, 320, 305].map((p, i) => ({ id: `f${i}`, title: 'iPhone 14 128GB unlocked', price: p })),
+  ];
+  const same = similarComps(L('iPhone 14 128GB, battery 91%', 200), phones, ['iphone']);
+  assert.deepEqual(same.map((o) => o.id).sort(), ['f0', 'f1', 'f2', 'f3']);
+  const bikes = [
+    ...[300, 320, 310].map((p, i) => ({ id: `a${i}`, title: 'Trek FX 3 hybrid bike', price: p })),
+    ...[500, 520, 510].map((p, i) => ({ id: `b${i}`, title: 'Trek FX 2 hybrid bike', price: p })),
+  ];
+  assert.deepEqual(similarComps(L('Trek FX 2 hybrid bike', 200), bikes, ['bike']).map((o) => o.id).sort(), ['b0', 'b1', 'b2']);
+  assert.deepEqual(modelNumber('PS5 disc edition + 2 controllers'), null); // a count, not a model
 });
