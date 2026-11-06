@@ -223,6 +223,10 @@ test/                automated tests; fixtures/ holds the labeled test set
 
 Run the tests with `npm test`. They include a full run against the pretend Marketplace, the labeled accuracy set, and, when Chrome or Chromium is installed, the real browser mode. `npm run accuracy` prints the accuracy report.
 
+## Also in this repository
+
+[Sister Protects](sister-protects/) is a separate app. It reads your Instagram screenshots and flags every place she commented, got tagged, or is named in the accounts she follows. It's one HTML file with nothing to install. See [its README](sister-protects/README.md).
+
 ---
 
 FlipRadar is not affiliated with, endorsed by, or connected to Facebook or Meta. It's meant for personal use at reasonable speeds.
