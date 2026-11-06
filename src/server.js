@@ -11,7 +11,7 @@ import { Store, cleanWatchInput, INTERVALS } from './store.js';
 import { Monitor } from './monitor.js';
 import { AiAdvisor, AI_MODELS } from './ai.js';
 import { Notifier } from './notify.js';
-import { FacebookClient } from './facebook/client.js';
+import { FacebookClient, MESSAGES } from './facebook/client.js';
 import { buildSearchUrl, parseMarketplaceUrl, cleanLocation } from './facebook/urls.js';
 import { RADIUS_MI, stateList, nearestMiles } from './area.js';
 import { parseCookieInput, hasSession } from './facebook/cookies.js';
@@ -174,6 +174,7 @@ export async function createApp(overrides = {}) {
   monitor.on('listings', (items) => hub.send('listings', items));
   monitor.on('dealsLogged', (n) => hub.send('dealsLogged', n));
   monitor.on('settings', () => hub.send('settings', maskSettings(store.settings)));
+  monitor.on('reload', (reason) => hub.send('reload', { reason }));
   monitor.on('updates', (items) => hub.send('updates', items));
   monitor.on('alert', (items) => hub.send('alert', items));
   monitor.on('watch', (w) => hub.send('watch', publicWatch(w)));
@@ -354,6 +355,18 @@ export async function createApp(overrides = {}) {
     pushFacebook();
     monitor.emitStatus();
     return masked;
+  });
+
+  // "Check my cookies": a test search in your area. Nothing is saved, nobody is alerted.
+  let checking = null;
+  add('POST', '/api/facebook/check', async () => {
+    if (!fb.ready()) throw new HttpError(400, MESSAGES.NO_COOKIES);
+    checking ||= monitor.checkFacebook().finally(() => {
+      checking = null;
+    });
+    const report = await checking;
+    pushFacebook();
+    return report;
   });
 
   add('POST', '/api/notify/test', async ({ body }) => {

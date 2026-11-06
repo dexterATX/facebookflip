@@ -180,6 +180,29 @@ test("a watch with a place of its own isn't held to your state, only to local pi
   assert.deepEqual(app.store.settings.area.states, ['GA'], 'and it never changes your state');
 });
 
+const FAR = ['Orlando', 'Miami', 'Jacksonville', 'Tallahassee'];
+
+test('towns outside the distance searched are dropped, going by where Facebook says it searched', async (t) => {
+  const { app, watch } = await boot(t, { mockOpts: { farEvery: 4 }, area: { pickupOnly: true } });
+  const kept = ofWatch(app, watch);
+  assert.ok(kept.length > 50 && kept.length < 100, `${kept.length} kept`);
+  assert.ok(kept.every((l) => !FAR.includes(l.city)), 'nothing from Orlando, Miami, Jacksonville or Tallahassee');
+  const { lat, lon, radiusMi } = watch.center;
+  assert.deepEqual({ lat, lon, radiusMi }, { lat: 27.9506, lon: -82.4572, radiusMi: 40.4 }, "read off the search page: Facebook's default, 65 km");
+  assert.equal(app.monitor.logs.reduce((n, x) => n + (x.notLocal || 0), 0), 100 - kept.length, 'each one counted in Activity');
+});
+
+test('a wider distance keeps the farther towns, and narrowing it hides them again', async (t) => {
+  const { app, watch, api } = await boot(t, { seedCount: 40, mockOpts: { farEvery: 4 }, area: { pickupOnly: true, radiusMi: 250 } });
+  assert.ok(ofWatch(app, watch).some((l) => FAR.includes(l.city)), 'within 250 miles, Orlando and the rest are kept');
+  await api('/api/settings', 'PUT', { area: { radiusMi: 40 } });
+  await app.monitor.scan(watch, { manual: true });
+  await settle(app);
+  const shown = ofWatch(app, watch).filter((l) => !l.hidden);
+  assert.ok(shown.length > 20 && shown.every((l) => !FAR.includes(l.city)), 'back to 40 miles, they are hidden');
+  assert.match(ofWatch(app, watch).find((l) => l.hidden).hiddenWhy, /^Too far: \w+, (FL|Florida), about \d+ mi away$/);
+});
+
 test('changing your area hides what is no longer local, except what you saved', async (t) => {
   const { app, watch, api } = await boot(t, { seedCount: 30, mockOpts: { shipEvery: 4 } });
   const all = ofWatch(app, watch);
@@ -189,6 +212,33 @@ test('changing your area hides what is no longer local, except what you saved', 
   await api('/api/settings', 'PUT', { area: { pickupOnly: true } });
   assert.ok(shipOnly.slice(1).every((l) => l.hidden && !l.saved), 'hidden, even deals it had saved for you');
   assert.equal(shipOnly[0].hidden, false, 'your own star stays');
+});
+
+test('"Check my cookies": a test search shows who is signed in, that page 1 and the next work, and the area, saving nothing', async (t) => {
+  const { app, api } = await boot(t, { mockOpts: { farEvery: 4 }, area: { pickupOnly: true, label: 'Tampa Bay' } });
+  await settle(app);
+  const before = Object.keys(app.store.listings).length;
+  const r = await api('/api/facebook/check', 'POST');
+  assert.equal(r.account, 'Pat Example');
+  assert.equal(r.query, 'bike', 'the search of your first watch');
+  assert.deepEqual([r.page1.ok, r.page1.results], [true, 24]);
+  assert.deepEqual([r.next.ok, r.next.results], [true, 24], 'one more page, by the cursor');
+  assert.ok(r.next.how);
+  assert.deepEqual([r.area.place, r.area.radiusMi], ['Tampa Bay', 40]);
+  assert.ok(r.area.notLocal > 0, 'the far-off towns mixed into page 1');
+  assert.equal(Object.keys(app.store.listings).length, before, 'nothing from the test was saved');
+  assert.equal((await api('/api/state')).facebook.lastCheck.at, r.at, 'still shown after a reload');
+});
+
+test('"Check my cookies" says plainly when Facebook no longer accepts them, and asks for them when there are none', async (t) => {
+  const stale = await boot(t, { cookies: 'stale' });
+  const r = await stale.api('/api/facebook/check', 'POST');
+  assert.equal(r.page1.code, 'LOGIN_REQUIRED');
+  assert.match(r.page1.message, /cookies/);
+  assert.equal(r.next, null);
+  const none = await boot(t, { cookies: 'none' });
+  assert.match((await none.api('/api/facebook/check', 'POST')).error, /Add your Facebook cookies/);
+  assert.equal(none.mock.requests.filter((q) => q.path.startsWith('/marketplace')).length, 0, 'and nothing was asked of Facebook');
 });
 
 test('only the first page when depth is set to 24, and a short search never asks for more', async (t) => {

@@ -20,38 +20,58 @@ const MAX_DEPTH = 60;
 /**
  * What a search page tells us about following its cursor:
  * tokens { dtsg, lsd, userId, name, rev }, the query the page ran
- * { docId, variables } (or null), and the script files it loads.
+ * { docId, variables } (or null), the script files it loads, and where the
+ * search is centered { lat, lon, radiusKm } (or null).
  */
 export function readRecipe(html, base = 'https://www.facebook.com') {
   const text = String(html || '');
-  const tokens = { dtsg: '', lsd: '', userId: '', name: '', rev: '' };
-  const queries = [];
-  for (const doc of jsonScripts(text)) walk(doc, 0, tokens, queries);
+  const found = { tokens: { dtsg: '', lsd: '', userId: '', name: '', rev: '' }, queries: [], centers: [] };
+  for (const doc of jsonScripts(text)) walk(doc, 0, found);
+  const { tokens, queries, centers } = found;
   fallbackTokens(text, tokens);
   // The page's own search query: one that takes a cursor, preferably named for the Marketplace search.
   const query =
     queries.find((q) => /MarketplaceSearch/i.test(q.name) && 'cursor' in q.variables) ||
     queries.find((q) => 'cursor' in q.variables && (q.variables.params || q.variables.count)) ||
     null;
-  return { tokens, query: query && { docId: query.docId, variables: query.variables }, scripts: scriptUrls(text, base) };
+  // Where it searched: the search's own filter (with its distance) beats any other location on the page.
+  const center = centers.find((c) => c.radiusKm) || centers[0] || null;
+  return { tokens, query: query && { docId: query.docId, variables: query.variables }, scripts: scriptUrls(text, base), center };
 }
 
-function walk(node, depth, tokens, queries) {
+function walk(node, depth, found) {
   if (depth > MAX_DEPTH || node === null || typeof node !== 'object') return;
   if (Array.isArray(node)) {
     // Facebook's module definitions: ["DTSGInitialData", [], { token: "…" }, 258]
-    if (typeof node[0] === 'string' && TOKEN_MODULES.has(node[0]) && node[2] && typeof node[2] === 'object') takeTokens(node[0], node[2], tokens);
-    for (const v of node) if (v && typeof v === 'object') walk(v, depth + 1, tokens, queries);
+    if (typeof node[0] === 'string' && TOKEN_MODULES.has(node[0]) && node[2] && typeof node[2] === 'object') takeTokens(node[0], node[2], found.tokens);
+    for (const v of node) if (v && typeof v === 'object') walk(v, depth + 1, found);
     return;
   }
   const id = node.queryID ?? node.queryId ?? node.doc_id ?? node.docID;
   if ((typeof id === 'string' || typeof id === 'number') && /^\d{6,}$/.test(String(id)) && node.variables && typeof node.variables === 'object') {
-    queries.push({ docId: String(id), variables: node.variables, name: String(node.preloaderID || node.queryName || node.name || '') });
+    found.queries.push({ docId: String(id), variables: node.variables, name: String(node.preloaderID || node.queryName || node.name || '') });
+  }
+  // The search's location filter: { filter_location_latitude, filter_location_longitude, filter_radius_km }.
+  const spot =
+    point(node.filter_location_latitude, node.filter_location_longitude) ||
+    (node.buyLocation && typeof node.buyLocation === 'object' ? point(node.buyLocation.latitude, node.buyLocation.longitude) : null);
+  if (spot) {
+    const km = Number(node.filter_radius_km);
+    found.centers.push({ ...spot, radiusKm: km > 0 && km < 2000 ? km : null });
   }
   for (const k in node) {
     const v = node[k];
-    if (v && typeof v === 'object') walk(v, depth + 1, tokens, queries);
+    if (v && typeof v === 'object') walk(v, depth + 1, found);
   }
+}
+
+/** A real place on the map, or null. */
+function point(lat, lon) {
+  const a = Number(lat);
+  const b = Number(lon);
+  if (lat == null || lon == null || !Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (Math.abs(a) > 90 || Math.abs(b) > 180 || (a === 0 && b === 0)) return null;
+  return { lat: a, lon: b };
 }
 
 function takeTokens(name, data, tokens) {

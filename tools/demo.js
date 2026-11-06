@@ -11,7 +11,7 @@ import { config } from '../src/config.js';
 // More listings than fit on one page (24), and now and then a new one placed on
 // page 2, like Facebook does, so the demo shows FlipRadar reading past page 1.
 // Some listings only ship, from out of state, like on Facebook: FlipRadar drops them.
-const mock = new MockFacebook({ minAddSec: 20, maxAddSec: 60, bargainEvery: 5, seedCount: 60, sinkEvery: 6, shipEvery: 9 });
+const mock = new MockFacebook({ minAddSec: 20, maxAddSec: 60, bargainEvery: 5, seedCount: 60, sinkEvery: 6, shipEvery: 9, farEvery: 11 });
 let base;
 try {
   base = await mock.listen(Number(process.env.MOCK_PORT || 3999));

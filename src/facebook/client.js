@@ -113,7 +113,7 @@ export class FacebookClient {
   /** New cookies were pasted in Settings: start over from those. */
   useCookies() {
     this.jar = new CookieJar(parseCookieInput(this.store.settings.cookies));
-    Object.assign(this.store.data.facebook, { jar: this.jar.toJSON(), account: null });
+    Object.assign(this.store.data.facebook, { jar: this.jar.toJSON(), account: null, lastCheck: null });
     this.recipes.clear();
     this.store.save();
   }
@@ -179,6 +179,7 @@ export class FacebookClient {
     }
     if (res.ok) {
       const recipe = readRecipe(raw.html, this.base);
+      res.center = recipe.center; // where Facebook searched, and how far: { lat, lon, radiusKm }
       const { userId, name = '' } = recipe.tokens;
       const known = this.store.data.facebook.account;
       if (userId && (known?.userId !== userId || known?.name !== name)) this.store.data.facebook.account = { userId, name };
@@ -364,6 +365,7 @@ export class FacebookClient {
       cookiesSaved: Boolean(this.store.settings.cookies),
       account: fb.account || null,
       paging: fb.paging || null,
+      lastCheck: fb.lastCheck || null, // the last "Check my cookies" 
       browser: await this.browser.status(),
     };
   }

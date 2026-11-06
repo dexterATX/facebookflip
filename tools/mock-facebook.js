@@ -84,6 +84,14 @@ const PLACES = [
   ['Largo', 'FL'],
 ];
 
+// Same state, but far outside a 40-mile search around Tampa.
+const FAR_LOCAL = [
+  ['Orlando', 'FL'],
+  ['Miami', 'FL'],
+  ['Jacksonville', 'FL'],
+  ['Tallahassee', 'FL'],
+];
+
 // Ship-only listings come from anywhere, like on Facebook.
 const FAR_PLACES = [
   ['Atlanta', 'GA'],
@@ -123,7 +131,7 @@ export function svgFor(id, art) {
 }
 
 export class MockFacebook {
-  constructor({ autoAdd = true, minAddSec = 25, maxAddSec = 75, seedCount = 22, bargainEvery = 8, pageSize = 24, sinkEvery = 0, shipEvery = 0, requireLogin = false } = {}) {
+  constructor({ autoAdd = true, minAddSec = 25, maxAddSec = 75, seedCount = 22, bargainEvery = 8, pageSize = 24, sinkEvery = 0, shipEvery = 0, farEvery = 0, requireLogin = false } = {}) {
     this.autoAdd = autoAdd;
     this.bargainEvery = bargainEvery; // about 1 in N listings is priced well under typical
     this.minAddSec = minAddSec;
@@ -139,6 +147,9 @@ export class MockFacebook {
     this.panel = false;
     // Every Nth listing ships only, from out of state (0 = never). Facebook mixes these in.
     this.shipEvery = shipEvery;
+    // Every Nth listing is pickup-only but from a far-off town in the same state, like the
+    // "results from outside your search area" Facebook adds (0 = never).
+    this.farEvery = farEvery;
     // Like Facebook for most people today: no results without a logged-in session.
     this.requireLogin = requireLogin;
     this.session = { userId: '100012345678901', name: 'Pat Example', xs: '27%3AdemoXs%3A2%3A1790000000', dtsg: 'NAcDemoDtsg:31:1790000000', lsd: 'AVqDemoLsd' };
@@ -204,7 +215,8 @@ export class MockFacebook {
     const factor = r[6] % this.bargainEvery === 0 ? 0.45 + (0.2 * r[3]) / 255 : 0.8 + (0.4 * r[3]) / 255;
     const price = Math.max(5, Math.round((typical * factor) / 5) * 5);
     const shipOnly = this.shipEvery > 0 && r[9] % this.shipEvery === 0;
-    const [city, state] = pick(shipOnly ? FAR_PLACES : PLACES, r[4] / 255);
+    const far = !shipOnly && this.farEvery > 0 && r[11] % this.farEvery === 0;
+    const [city, state] = pick(shipOnly ? FAR_PLACES : far ? FAR_LOCAL : PLACES, r[4] / 255);
     const delivery = shipOnly ? ['SHIPPING'] : r[10] % 4 === 0 ? ['IN_PERSON', 'SHIPPING'] : ['IN_PERSON'];
     // What the seller wrote. Some are trouble, which FlipRadar should catch.
     const roll = r[7] % 100;

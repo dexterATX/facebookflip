@@ -150,11 +150,11 @@ A search whose results all fit on page 1 never asks for more. The limit is in Se
 Settings → **Your area** sets one place and distance for every search.
 
 - **Place:** paste a Marketplace link (the most exact way: on Facebook, open Marketplace, click your location, pick it and a distance, search for anything, and copy the address bar; FlipRadar takes the place and the distance from it), or type your city.
-- **Distance:** Facebook's default for your place, or 1 to 500 miles.
-- **Local pickup only** (on by default): asks Facebook for local pickup, and drops listings that only ship.
+- **Distance:** Facebook's default for your place, or 1 to 500 miles. Listings from towns clearly farther than this are dropped too, even when Facebook mixes them in ("results from outside your search area"). FlipRadar reads where each search is centered, and how far it reaches, off Facebook's own search page, and looks each listing's town up in the US Census list of places (`src/data/places-us.json`), measuring to the near edge of the town with some slack. A town it doesn't know is kept.
+- **Local pickup only** (on by default): asks Facebook for local pickup, and drops listings that only ship. Turned off, listings that can ship are kept from anywhere; only pickup-only ones have to be near.
 - **Only these states:** listings from other states are dropped. FlipRadar fills this in from the first results in your area when nearly all of them are in one state, and again if you move your area somewhere else. Near a state line, list both (like `FL, GA`) or leave it empty; what you type stays.
 
-A watch can still name a city of its own. It searches there, still local pickup only, and isn't held to your state(s).
+A watch can still name a city of its own. It searches there, with the same pickup and distance rules around that city, and isn't held to your state(s).
 
 Dropped listings never show up, never alert and don't count as price comparisons. The Activity log counts them ("12 not local, skipped"). Changing your area hides stored listings that no longer fit; anything you starred yourself stays.
 
@@ -164,7 +164,7 @@ FlipRadar signs in to Facebook with your cookies (small files your browser keeps
 
 1. On this computer, open **facebook.com** in Firefox or Chrome, logged in. A spare account is safest.
 2. Add the free **Cookie-Editor** extension, open it while on facebook.com, and click **Export**. That copies the cookies.
-3. In FlipRadar, Settings → **Facebook cookies**: paste them and press **Save cookies**. It checks your watches right away and shows whose account it's using.
+3. In FlipRadar, Settings → **Facebook cookies**: paste them and press **Save cookies**. It checks them right away with one test search in your area and shows a checklist: whose account it's using, that the search works, that the next pages work (and how), and where it's searching and how far, with how many results on page 1 weren't local. Nothing from the test is saved, and **Check my cookies** runs it again any time.
 
 - **They stay only on this computer**, in `data/db.json`. FlipRadar keeps them fresh as Facebook updates them, like a browser does.
 - **When they stop working** (they expire, or you log out of Facebook in that browser), FlipRadar says so in a banner and waits for fresh ones instead of retrying.
@@ -219,6 +219,7 @@ While the dashboard is open, it also plays a sound and can show desktop notifica
 - **When to read more pages:** `morePlan` and `readMore` in `src/monitor.js` decide when following the cursor is worth it, and add what turns up.
 - **Requests** send the same headers Chrome sends, with your cookies, and keep the cookies Facebook updates (`src/facebook/http.js`, `src/facebook/client.js`).
 - **Following the cursor:** `src/facebook/paging.js` reads the session tokens, the page's own query and the cursor from page 1, builds the same next-page request Facebook's page code sends to `/api/graphql/`, and reads each answer. The backup way, scrolling in a hidden browser with the same cookies, is `src/facebook/browser.js`.
+- **Your area:** `src/area.js` decides what's local: pickup, your state(s), and distance. `src/places.js` looks towns up in `src/data/places-us.json`, built from the US Census Bureau's 2024 Gazetteer of places (public domain) by `tools/build-places.js`; to rebuild it, download `2024_Gaz_place_national.zip` from the Census site, unzip it, and run `node tools/build-places.js 2024_Gaz_place_national.txt`.
 - **Your area:** `src/area.js` decides what's local; the search links ask Facebook for local pickup (`src/facebook/urls.js`).
 - **New vs. old:** the first check of a watch is a quiet baseline. After that, a listing alerts if FlipRadar hasn't seen it before *and* it was posted within your alert window, 60 minutes by default (`src/monitor.js`).
 - **Deals:** red flags, resale estimate, profit math and the verdict live in `src/evaluate.js`. The price guide matcher is `src/priceguide.js`. The closer look (full listing, then AI) runs in `src/monitor.js`, and the optional AI is in `src/ai.js`.

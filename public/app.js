@@ -1181,7 +1181,7 @@ function openSettings() {
 
       <section class="section">
         <h3>${icon('pin')}Your area</h3>
-        <p class="hint">Every search uses this, and anything that isn't local is dropped: listings that only ship, and ones from outside your state(s).</p>
+        <p class="hint">Every search uses this, and anything that isn't local is dropped: listings that only ship, ones from outside your state(s), and ones from towns farther away than your distance.</p>
         <label class="field"><span>Paste a Marketplace link <small>(the most exact way)</small></span>
           <div class="paste-row"><input class="input" id="area-link" placeholder="https://www.facebook.com/marketplace/…" autocomplete="off" inputmode="url"><button class="btn btn-sm" data-act="area-link">Use it</button></div>
           <small class="hint">On Facebook: Marketplace → click your location → pick it and a distance → search for anything → copy the address bar.</small></label>
@@ -1189,8 +1189,9 @@ function openSettings() {
           <label class="field"><span>Or type your city</span><input class="input" data-k="area.location" value="${esc(a.location || '')}" placeholder="tampa" maxlength="80" autocomplete="off"></label>
           <label class="field"><span>Name it <small>(optional)</small></span><input class="input" data-k="area.label" value="${esc(a.label || '')}" placeholder="Tampa Bay" maxlength="60" autocomplete="off"></label>
         </div>
-        <label class="field"><span>Distance</span><select class="input" data-k="area.radiusMi" data-num>${miles}</select></label>
-        <div class="toggle-line"><div class="txt"><b>Local pickup only</b><small>Asks Facebook for local pickup, and drops listings that only ship.</small></div>${sw('area.pickupOnly', a.pickupOnly)}</div>
+        <label class="field"><span>Distance</span><select class="input" data-k="area.radiusMi" data-num>${miles}</select>
+          <small class="hint">Listings from towns clearly farther than this are dropped too, even when Facebook mixes them in.</small></label>
+        <div class="toggle-line"><div class="txt"><b>Local pickup only</b><small>Asks Facebook for local pickup, and drops listings that only ship. Turned off, listings that ship are kept from anywhere.</small></div>${sw('area.pickupOnly', a.pickupOnly)}</div>
         <label class="field"><span>Only these states</span><input class="input" data-k="area.states" value="${esc((a.states || []).join(', '))}" placeholder="${a.autoStates ? 'Filled in from your first results' : 'e.g. FL'}" maxlength="80" autocomplete="off">
           <small class="hint">Listings from other states are dropped${a.autoStates ? ' (filled in from the results in your area)' : ''}. Near a state line, list both (like <code>FL, GA</code>), or leave it empty. A watch with its own location isn't held to this.</small></label>
       </section>
@@ -1278,14 +1279,56 @@ function renderFacebookBox() {
   box.innerHTML = `
     <h3>${icon('login')}Facebook cookies</h3>
     <div class="status-line ${line[0]}">${icon(line[1])}<span>${esc(line[2])}</span></div>
-    <ol class="howto">
+    ${state.checkingCookies ? `<p class="hint checking">${icon('refresh')}Checking with a test search in your area…</p>` : checkList(f.lastCheck)}
+    <ol class="howto spaced">
       <li>On this computer, open <b>facebook.com</b> in Firefox or Chrome, logged in. A spare account is safest.</li>
       <li>Add the free <b>Cookie-Editor</b> extension, open it on facebook.com, click <b>Export</b> (it copies them).</li>
       <li>Paste here and press <b>Save cookies</b>.</li>
     </ol>
     <textarea class="input" id="cookie-box" placeholder="Paste the export here (JSON, or c_user=…; xs=…; …)" spellcheck="false"></textarea>
-    <div class="btn-row"><button class="btn btn-sm btn-primary" data-act="save-cookies">Save cookies</button>${s.cookiesSet ? '<button class="btn btn-sm btn-ghost" data-act="clear-cookies">Remove cookies</button>' : ''}</div>
+    <div class="btn-row"><button class="btn btn-sm btn-primary" data-act="save-cookies">Save cookies</button>${s.cookiesSet || state.demo ? '<button class="btn btn-sm" data-act="check-cookies" title="One test search in your area: page 1 and the next. Nothing is saved.">Check my cookies</button>' : ''}${s.cookiesSet ? '<button class="btn btn-sm btn-ghost" data-act="clear-cookies">Remove cookies</button>' : ''}</div>
     <p class="hint">Stored only on this computer, and kept fresh as Facebook updates them. Heads-up: Facebook's rules don't allow automated checking, so a spare account is safest, and gentle check speeds keep the risk low.</p>`;
+}
+
+/** The last "Check my cookies", as a checklist. */
+function checkList(c) {
+  if (!c) return '';
+  const line = (ok, text) => `<li class="${ok ? 'ok' : 'bad'}">${icon(ok ? 'check' : 'alert')}<span>${esc(text)}</span></li>`;
+  const p1 = c.page1 || {};
+  const rows = [];
+  // (Who's signed in shows just above, in the status line.)
+  if (['LOGIN_REQUIRED', 'CHECKPOINT', 'INELIGIBLE'].includes(p1.code)) rows.push(line(false, p1.message));
+  else rows.push(p1.ok ? line(true, `Search works: ${p1.results} result${p1.results === 1 ? '' : 's'} on page 1 for “${c.query}”`) : line(false, p1.message));
+  if (c.next) {
+    rows.push(
+      !c.next.ok
+        ? line(false, `Next pages: ${c.next.message}`)
+        : c.next.results
+          ? line(true, `Next pages work: ${c.next.results} more on page 2 (${c.next.how})`)
+          : line(true, 'Facebook had just one page for this search, so there was no next page to try'),
+    );
+  }
+  if (c.area) {
+    const where = [c.area.place && `around ${c.area.place}`, c.area.radiusMi && `within ${c.area.radiusMi} mi`].filter(Boolean).join(', ');
+    rows.push(line(true, `Searching${where ? ` ${where}` : ''}. ${c.area.notLocal} of the ${p1.results} on page 1 ${c.area.notLocal === 1 ? "wasn't" : "weren't"} local and would be skipped.`));
+  }
+  return `<ul class="checklist">${rows.join('')}</ul><p class="hint">Checked ${agoLong(c.at)}. Nothing from the test was saved.</p>`;
+}
+
+/** One test search in your area, page 1 and the next; the result shows in the cookies box. */
+async function checkCookies() {
+  if (state.checkingCookies) return;
+  state.checkingCookies = true;
+  renderFacebookBox();
+  try {
+    const report = await api('/api/facebook/check', { method: 'POST' });
+    state.facebook = { ...state.facebook, lastCheck: report };
+  } catch (ex) {
+    toast(ex.message, 'error', { ms: 8000 });
+  } finally {
+    state.checkingCookies = false;
+    if (state.modal === 'settings') renderFacebookBox();
+  }
 }
 
 async function onSettingsChange(e) {
@@ -1376,6 +1419,11 @@ async function onSettingsClick(e) {
         session ? 'ok' : 'warn',
         { ms: 7000 },
       );
+      if (session) await checkCookies();
+      break;
+    }
+    case 'check-cookies': {
+      await checkCookies();
       break;
     }
     case 'area-link': {

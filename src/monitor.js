@@ -21,7 +21,8 @@ import { buildSearchUrl } from './facebook/urls.js';
 import { filterReason } from './deals.js';
 import { evaluate, isCandidate, similarComps, findFlags } from './evaluate.js';
 import { median } from './util.js';
-import { notLocal, homeState } from './area.js';
+import { notLocal, homeState, searchPlace } from './area.js';
+import { milesBetween, nearestTown } from './places.js';
 import { jitter, clamp, log } from './util.js';
 
 const GAP_MS = 6000; // default pause between two Facebook checks
@@ -387,6 +388,8 @@ export class Monitor extends EventEmitter {
 
     // Your state, filled in from the results in your area (you can change it in Settings).
     if (!watch.location) this.learnHomeState(res.listings);
+    // Where Facebook searched, and how far. If that's new, re-check what's stored for it.
+    if (this.learnCenter(watch, res.center) && this.applyArea()) this.emit('reload', 'area');
 
     // Page 1 first, and its alerts go out right away.
     const firstScan = !watch.baselineAt;
@@ -498,6 +501,47 @@ export class Monitor extends EventEmitter {
   }
 
   /** Fill in "only these states" once, from the state nearly all your local results are in. */
+  /**
+   * "Check my cookies": one search in your area, page 1 and the next, the way
+   * a real check runs them, but nothing is saved and nobody is alerted.
+   * Searches for your first watch, or for something sold everywhere.
+   */
+  async checkFacebook() {
+    const area = this.store.settings.area;
+    const probe = this.store.watches.find((w) => w.enabled && !w.location) || { query: 'chair' };
+    const url = buildSearchUrl(probe, this.fbBase, area);
+    const hadLocation = Boolean(area.location);
+    const first = await this.fb.search(url, { hadLocation });
+    const report = {
+      at: Date.now(),
+      query: probe.query,
+      account: this.store.data.facebook.account?.name || '',
+      page1: { ok: first.ok, code: first.code, message: first.message, results: first.listings.length },
+      area: null,
+      next: null,
+    };
+    if (first.ok) {
+      const c = first.center;
+      const rules = { ...area, center: c ? { lat: c.lat, lon: c.lon } : null, radiusMi: c?.radiusKm ? c.radiusKm / 1.609344 : area.radiusMi };
+      const town = c && nearestTown(c);
+      report.area = {
+        // Named the way you named it; otherwise the town Facebook's search is centered on.
+        place: area.label || (area.location && !/^\d+$/.test(area.location) ? area.location.replace(/(^|\s)\S/g, (x) => x.toUpperCase()) : '') || (town ? `${town.name}, ${town.state}` : ''),
+        radiusMi: rules.radiusMi ? Math.round(rules.radiusMi) : null,
+        notLocal: first.listings.filter((l) => notLocal(l, rules)).length,
+      };
+      if (first.hasMore) {
+        const more = await this.fb.searchMore(url, { hadLocation, maxPages: 2 });
+        report.next = more.ok ? { ok: true, how: more.how || '', results: more.listings.length } : { ok: false, code: more.code, message: more.message };
+      } else {
+        report.next = { ok: true, how: '', results: 0 }; // Facebook had just the one page
+      }
+    }
+    this.store.data.facebook.lastCheck = report;
+    this.store.save();
+    return report;
+  }
+
   learnHomeState(listings) {
     const area = this.store.settings.area;
     if (!area || !area.autoStates || area.states?.length) return;
@@ -509,22 +553,48 @@ export class Monitor extends EventEmitter {
   }
 
   /**
-   * What counts as local for a watch: your area's rules. A watch that searches
-   * a place of its own isn't held to your state(s), only to local pickup.
+   * Where Facebook searched for a watch, and how far, as its search page says.
+   * Returns whether that changed (a new place or distance).
+   */
+  learnCenter(watch, center) {
+    if (!center) return false;
+    const next = {
+      lat: center.lat,
+      lon: center.lon,
+      radiusMi: center.radiusKm ? Math.round((center.radiusKm / 1.609344) * 10) / 10 : null,
+      for: searchPlace(watch, this.store.settings.area),
+    };
+    const was = watch.center;
+    watch.center = next;
+    return !was || was.for !== next.for || milesBetween(was, next) > 1 || Math.abs((was.radiusMi || 0) - (next.radiusMi || 0)) > 1;
+  }
+
+  /**
+   * What counts as local for a watch: your area's rules, and the distance its
+   * search covers. A watch that searches a place of its own isn't held to
+   * your state(s), only to local pickup and its own distance.
    */
   areaFor(watch) {
     const area = this.store.settings.area;
-    return watch?.location ? { ...area, states: [] } : area;
+    const rules = { ...area, center: null };
+    if (watch?.location) rules.states = [];
+    const c = watch?.center;
+    if (c && c.for === searchPlace(watch, area)) {
+      rules.center = { lat: c.lat, lon: c.lon };
+      rules.radiusMi = c.radiusMi || (watch.radius ? watch.radius / 1.609344 : area.radiusMi);
+    }
+    return rules;
   }
 
   /** Your area changed: hide stored listings that aren't local. Ones you starred yourself stay. */
   applyArea() {
-    const watches = new Map(this.store.watches.map((w) => [w.id, w]));
+    const rules = new Map(this.store.watches.map((w) => [w.id, this.areaFor(w)]));
+    const yours = this.areaFor(null);
     let n = 0;
     for (const l of Object.values(this.store.listings)) {
       if (l.hidden || (l.saved && !l.autoSaved)) continue;
       // Local for any of its watches is local enough.
-      const whys = (l.watchIds?.length ? l.watchIds : [null]).map((id) => notLocal(l, this.areaFor(watches.get(id))));
+      const whys = (l.watchIds?.length ? l.watchIds : [null]).map((id) => notLocal(l, rules.get(id) || yours));
       const why = whys.every(Boolean) ? whys[0] : null;
       if (why) {
         l.hidden = true;
