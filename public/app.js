@@ -266,12 +266,12 @@ function watchStatus(w) {
     const more = w.lastMore && now - w.lastMore.at < 15 * 60e3 ? w.lastMore : null;
     const total = Math.max(st.results || 0, more?.results || 0);
     const res = total === 0 ? 'no matches yet' : `${total} results${more && more.pages > 1 ? ` · ${more.pages} pages` : ''}`;
-    const tip = st.moreProblem
-      ? `Only the first page was read: ${st.moreProblem}`
+    const tip = w.moreProblem
+      ? `Only the first page was read: ${w.moreProblem}`
       : more && more.pages > 1
         ? `Page 1 is read every check. All ${more.pages} pages were read ${agoLong(more.at, now)}.`
         : '';
-    return `<div class="watch-status ok"${tip ? ` title="${esc(tip)}"` : ''}>${icon('check')}<span>${esc(agoLong(st.at, now))} · ${esc(res)}${st.moreProblem ? ' · first page only' : ''}</span>${next}</div>`;
+    return `<div class="watch-status ok"${tip ? ` title="${esc(tip)}"` : ''}>${icon('check')}<span>${esc(agoLong(st.at, now))} · ${esc(res)}${w.moreProblem ? ' · first page only' : ''}</span>${next}</div>`;
   }
   return `<div class="watch-status warn" title="${esc(st.message || '')}">${icon('alert')}<span>${esc(SHORT[st.code] || 'Problem')}</span>${next}</div>`;
 }

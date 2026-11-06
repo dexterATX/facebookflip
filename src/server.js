@@ -290,8 +290,14 @@ export async function createApp(overrides = {}) {
 
   add('PUT', '/api/settings', async ({ body }) => {
     const before = store.settings.engine;
+    const depthBefore = [store.settings.engine, store.settings.searchPages].join();
     const rulesBefore = JSON.stringify([store.settings.deals, store.settings.hidePlaceholderPrices]);
     applySettings(store.settings, body);
+    // A new connection mode or depth applies at the next check, not after a pause.
+    if ([store.settings.engine, store.settings.searchPages].join() !== depthBefore) {
+      monitor.retryMore();
+      for (const w of store.watches) hub.send('watch', publicWatch(w));
+    }
     store.save();
     if (JSON.stringify([store.settings.deals, store.settings.hidePlaceholderPrices]) !== rulesBefore) {
       // New deal rules: re-sort everything already found.
@@ -348,6 +354,7 @@ export async function createApp(overrides = {}) {
       .then((r) => {
         if (r.ok) {
           Object.assign(store.data.facebook, { connected: true, connectedAt: Date.now() });
+          monitor.retryMore();
           store.save();
           monitor.problem = null;
           monitor.clearCooldown();

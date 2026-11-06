@@ -511,6 +511,14 @@ export class Monitor extends EventEmitter {
     return null;
   }
 
+  /** Something changed that affects reading past page 1 (settings, a new login): try again at the next check. */
+  retryMore() {
+    for (const w of this.store.watches) {
+      delete w.morePausedUntil;
+      w.moreProblem = null;
+    }
+  }
+
   /** Read past page 1 (scrolling in the background browser) and add what turns up. */
   async readMore(watch, url, plan, { firstScan, manual }) {
     const res = await this.fb.searchMore(url, {
@@ -526,10 +534,14 @@ export class Monitor extends EventEmitter {
     watch.lastMoreAt = now;
     const base = { at: now, watchId: watch.id, watch: watch.name, engine: res.engine, ms: res.ms, more: true, reason: plan.reason, manual, url };
     if (!res.ok) {
-      // Page 1 worked, so this isn't a failed check: note it on the watch and try again later.
-      watch.morePausedUntil = now + MORE_RETRY_MS;
-      watch.lastStatus = { ...watch.lastStatus, moreProblem: res.message };
-      if (res.code !== 'NO_BROWSER') this.addLog({ ...base, code: res.code, message: `Couldn't read past the first page: ${res.message}`, found: 0, fresh: 0 });
+      // Page 1 worked, so this isn't a failed check. The watch says "first page only" until
+      // reading more works again. No browser (or Fast only mode) is a quick local check, so
+      // it's simply asked again next time; Facebook trouble waits a while before a retry.
+      watch.moreProblem = res.message;
+      if (res.code !== 'NO_BROWSER') {
+        watch.morePausedUntil = now + MORE_RETRY_MS;
+        this.addLog({ ...base, code: res.code, message: `Couldn't read past the first page: ${res.message}`, found: 0, fresh: 0 });
+      }
       this.store.save();
       this.emit('watch', watch);
       return;
@@ -544,8 +556,8 @@ export class Monitor extends EventEmitter {
       pages,
       fresh: (last.fresh || 0) + batch.fresh.length,
       deals: (last.deals || 0) + batch.deals,
-      moreProblem: null,
     };
+    watch.moreProblem = null;
     watch.lastMore = { at: now, pages, results: res.listings.length };
     this.addLog({ ...base, code: 'OK', message: 'More results', found: res.listings.length, pages, fresh: batch.fresh.length, deals: batch.deals, closer: batch.closer, alerts: batch.freshNow.length });
     this.store.save();

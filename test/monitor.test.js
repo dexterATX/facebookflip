@@ -321,7 +321,7 @@ test('reading past page 1: when it happens, and failures that are not failed che
   await t.monitor.scan(w, { manual: true });
   assert.equal(w.lastStatus.ok, true);
   assert.equal(w.failCount, 0);
-  assert.match(w.lastStatus.moreProblem, /login/);
+  assert.match(w.moreProblem, /login/);
   assert.ok(w.morePausedUntil > Date.now() + 20 * 60e3, 'tries again in a while, not every check');
   assert.equal(t.monitor.logs.at(-1).more, true);
   assert.equal(plan({ ...ok(page(24)), hasMore: true }, 24, { manual: true }), null, 'paused');

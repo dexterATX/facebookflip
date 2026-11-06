@@ -21,7 +21,9 @@ async function boot(t, { engine = 'auto', seedCount = 70, searchPages = 10, pane
   const app = await createApp({ fbBase, dataDir, scanGapMs: 50, requestGapMs: 20, scrollPauseMs: 60, host: '127.0.0.1', demo: false, browserPath: process.env.BROWSER_PATH || '' });
   app.store.settings.engine = engine;
   app.store.settings.searchPages = searchPages;
-  await app.listen(0, '127.0.0.1');
+  const addr = await app.listen(0, '127.0.0.1');
+  const api = (p, method = 'GET', body) =>
+    fetch(`http://127.0.0.1:${addr.port}${p}`, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
   t.after(async () => {
     await app.close();
     await mock.close();
@@ -30,7 +32,7 @@ async function boot(t, { engine = 'auto', seedCount = 70, searchPages = 10, pane
   // Checked once right away, then only when the test says so.
   const watch = app.store.addWatch({ name: 'Bikes', query: 'bike', location: 'tampa', intervalSec: 3600 });
   const first = await until(() => watch.lastScanAt && !app.monitor.busy && watch.lastStatus);
-  return { mock, app, watch, first };
+  return { mock, app, watch, first, api };
 }
 
 async function until(fn, ms = 90000) {
@@ -100,7 +102,8 @@ test('only the first page when depth is set to 24, or in Fast only mode', { skip
 
   const fast = await boot(t, { engine: 'fast' });
   assert.equal(ofWatch(fast.app, fast.watch).length, 24);
-  assert.match(fast.watch.lastStatus.moreProblem, /Fast only mode/);
+  assert.match(fast.watch.moreProblem, /Fast only mode/);
+  assert.ok(!fast.watch.morePausedUntil, 'no pause: switching to Auto works at the next check')
   assert.equal(fast.app.fb.browser.ctx, null, 'no browser was started');
 });
 
@@ -115,5 +118,17 @@ test('a search with one page of results never opens the browser', { skip }, asyn
 test('reads every page when the results scroll inside a panel instead of the page', { skip }, async (t) => {
   const { app, watch, first } = await boot(t, { panel: true });
   assert.equal(first.pages, 3);
+  assert.equal(ofWatch(app, watch).length, 70);
+});
+
+test('switching from Fast only to Auto reads past page 1 at the very next check', { skip }, async (t) => {
+  const { app, watch, api } = await boot(t, { engine: 'fast' });
+  assert.match(watch.moreProblem, /Fast only mode/);
+  const state = await api('/api/state');
+  assert.match(state.watches[0].moreProblem, /Fast only mode/, 'the dashboard can say "first page only"');
+  await api('/api/settings', 'PUT', { engine: 'auto' });
+  await app.monitor.scan(watch, { manual: true });
+  assert.equal(watch.moreProblem, null);
+  assert.equal(watch.lastMore.pages, 3);
   assert.equal(ofWatch(app, watch).length, 70);
 });
