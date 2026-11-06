@@ -126,8 +126,9 @@ test('switching from Fast only to Auto reads past page 1 at the very next check'
   assert.match(watch.moreProblem, /Fast only mode/);
   const state = await api('/api/state');
   assert.match(state.watches[0].moreProblem, /Fast only mode/, 'the dashboard can say "first page only"');
+  assert.ok(!watch.lastMoreAt, 'a deeper read that could not run does not count as done');
   await api('/api/settings', 'PUT', { engine: 'auto' });
-  await app.monitor.scan(watch, { manual: true });
+  await app.monitor.scan(watch); // an ordinary scheduled check, not "Check now"
   assert.equal(watch.moreProblem, null);
   assert.equal(watch.lastMore.pages, 3);
   assert.equal(ofWatch(app, watch).length, 70);

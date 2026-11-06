@@ -515,6 +515,7 @@ export class Monitor extends EventEmitter {
   retryMore() {
     for (const w of this.store.watches) {
       delete w.morePausedUntil;
+      delete w.lastMoreAt; // due for a deeper look right away
       w.moreProblem = null;
     }
   }
@@ -531,7 +532,6 @@ export class Monitor extends EventEmitter {
     });
     const now = Date.now();
     if (!this.store.getWatch(watch.id) || this.stopped) return;
-    watch.lastMoreAt = now;
     const base = { at: now, watchId: watch.id, watch: watch.name, engine: res.engine, ms: res.ms, more: true, reason: plan.reason, manual, url };
     if (!res.ok) {
       // Page 1 worked, so this isn't a failed check. The watch says "first page only" until
@@ -558,6 +558,7 @@ export class Monitor extends EventEmitter {
       deals: (last.deals || 0) + batch.deals,
     };
     watch.moreProblem = null;
+    watch.lastMoreAt = now; // only a deeper read that worked counts
     watch.lastMore = { at: now, pages, results: res.listings.length };
     this.addLog({ ...base, code: 'OK', message: 'More results', found: res.listings.length, pages, fresh: batch.fresh.length, deals: batch.deals, closer: batch.closer, alerts: batch.freshNow.length });
     this.store.save();
