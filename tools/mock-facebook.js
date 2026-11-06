@@ -115,12 +115,20 @@ export function svgFor(id, art) {
 }
 
 export class MockFacebook {
-  constructor({ autoAdd = true, minAddSec = 25, maxAddSec = 75, seedCount = 22, bargainEvery = 8 } = {}) {
+  constructor({ autoAdd = true, minAddSec = 25, maxAddSec = 75, seedCount = 22, bargainEvery = 8, pageSize = 24, sinkEvery = 0 } = {}) {
     this.autoAdd = autoAdd;
     this.bargainEvery = bargainEvery; // about 1 in N listings is priced well under typical
     this.minAddSec = minAddSec;
     this.maxAddSec = maxAddSec;
     this.seedCount = seedCount;
+    // Like Facebook: 24 results per page, the rest load as you scroll.
+    this.pageSize = pageSize;
+    // Facebook's "newest first" isn't strict: some new listings show up lower
+    // down. Every Nth new listing is placed on page 2 (0 = never).
+    this.sinkEvery = sinkEvery;
+    this.grown = 0;
+    // Results inside a scrolling panel instead of the page itself (some layouts do this).
+    this.panel = false;
     this.mode = 'ok'; // 'ok' | 'login' | 'ratelimit' | 'empty' | 'error' | 'needs-js'
     this.streams = new Map(); // key -> { query, items: [], nextAddAt }
     this.requests = [];
@@ -227,7 +235,9 @@ export class MockFacebook {
     const now = Date.now();
     for (const s of this.streams.values()) {
       if (now >= s.nextAddAt) {
-        s.items.push(this.makeListing(s.query, { ageMs: Math.random() * 40e3 }));
+        this.grown++;
+        const sink = this.sinkEvery > 0 && this.grown % this.sinkEvery === 0;
+        s.items.push(this.makeListing(s.query, { ageMs: Math.random() * 40e3, sink }));
         s.nextAddAt = now + this.delay();
       }
     }
@@ -276,7 +286,8 @@ export class MockFacebook {
     };
   }
 
-  searchEdges(u) {
+  /** The listings a search shows, in Facebook's order: newest first, except "sunk" ones placed on page 2. */
+  ordered(u) {
     const sp = u.searchParams;
     const parts = u.pathname.split('/').filter(Boolean);
     const location = parts[1] && parts[1] !== 'search' ? parts[1] : '';
@@ -284,12 +295,19 @@ export class MockFacebook {
     const s = this.streamFor(query, location);
     const min = sp.has('minPrice') ? Number(sp.get('minPrice')) : -Infinity;
     const max = sp.has('maxPrice') ? Number(sp.get('maxPrice')) : Infinity;
-    const items = s.items
-      .filter((l) => l.price >= min && l.price <= max)
-      .sort((a, b) => b.creationTime - a.creationTime)
-      .slice(0, 24);
-    const edges = items.map((l) => this.edge(l));
-    if (edges.length > 4) {
+    const matching = s.items.filter((l) => l.price >= min && l.price <= max).sort((a, b) => b.creationTime - a.creationTime);
+    const sunk = matching.filter((l) => l.sink);
+    const items = matching.filter((l) => !l.sink);
+    items.splice(Math.min(items.length, this.pageSize + 3), 0, ...sunk);
+    return { items, query };
+  }
+
+  /** One page of results. `offset` comes from the cursor of the page before. */
+  searchEdges(u, offset = 0) {
+    const { items, query } = this.ordered(u);
+    const page = items.slice(offset, offset + this.pageSize);
+    const edges = page.map((l) => this.edge(l));
+    if (offset === 0 && edges.length > 4) {
       // A sponsored story, which FlipRadar must ignore.
       edges.splice(3, 0, {
         node: {
@@ -298,37 +316,90 @@ export class MockFacebook {
         },
       });
     }
-    if (!edges.length) edges.push({ node: { __typename: 'MarketplaceSearchFeedNoResults', id: 'no-results' } });
-    return { edges, query };
+    if (offset === 0 && !edges.length) edges.push({ node: { __typename: 'MarketplaceSearchFeedNoResults', id: 'no-results' } });
+    const next = offset + this.pageSize;
+    const hasNext = next < items.length;
+    const pageInfo = { has_next_page: hasNext, end_cursor: hasNext ? Buffer.from(JSON.stringify({ o: next })).toString('base64') : null };
+    return { edges, pageInfo, query };
+  }
+
+  /**
+   * The script a results page runs, like Facebook's: show the cards, and when
+   * you scroll near the bottom, ask /api/graphql/ for the next page with the
+   * cursor. `first` is the embedded first page, or null to fetch it.
+   */
+  pageScript(u, first) {
+    const enc = (o) => JSON.stringify(o).replace(/</g, '\\u003C');
+    return `<script>
+(function () {
+  var feed = document.getElementById('feed');
+  var panel = ${this.panel ? 'true' : 'false'};
+  if (panel) feed.style.cssText = 'height:100vh;overflow:auto';
+  var scroller = panel ? feed : document.documentElement;
+  var url = ${enc(u.pathname + u.search)};
+  var cursor = null, more = true, busy = false;
+  function show(conn) {
+    conn.edges.forEach(function (e) {
+      var l = e.node && e.node.listing;
+      if (!l || e.node.__typename !== 'MarketplaceFeedListingStoryObject') return;
+      var a = document.createElement('a');
+      a.href = '/marketplace/item/' + l.id + '/';
+      a.className = 'card';
+      a.textContent = l.listing_price.formatted_amount + ' ' + l.marketplace_listing_title;
+      feed.appendChild(a);
+    });
+    cursor = conn.page_info.end_cursor;
+    more = conn.page_info.has_next_page;
+  }
+  function load() {
+    if (busy || !more) return;
+    busy = true;
+    var vars = JSON.stringify({ count: ${this.pageSize}, cursor: cursor, url: url });
+    fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-fb-friendly-name': 'CometMarketplaceSearchContentPaginationQuery' },
+      body: 'fb_api_req_friendly_name=CometMarketplaceSearchContentPaginationQuery&doc_id=24000000000000001&variables=' + encodeURIComponent(vars) })
+      .then(function (r) { return r.text(); })
+      .then(function (t) { show(JSON.parse(t.replace('for (;;);', '').split('\\n')[0]).data.marketplace_search.feed_units); })
+      .finally(function () { busy = false; check(); });
+  }
+  function check() {
+    var seen = panel ? feed.scrollTop + feed.clientHeight : window.innerHeight + window.scrollY;
+    if (more && seen >= scroller.scrollHeight - 600) load();
+  }
+  (panel ? feed : window).addEventListener('scroll', check, { passive: true });
+  var first = ${enc(first)};
+  if (first) show(first); else { more = true; load(); }
+})();
+</script>`;
   }
 
   /** A page that only shows listings after its JavaScript calls /api/graphql/ (like Facebook can do). */
   jsShellPage(u) {
-    const enc = (o) => JSON.stringify(o).replace(/</g, '\\u003C');
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Marketplace | Facebook (demo)</title></head><body><div id="feed"></div>
-<script>
-fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-  body: 'fb_api_req_friendly_name=CometMarketplaceSearchContentPaginationQuery&url=' + encodeURIComponent(${enc(u.pathname + u.search)}) })
-  .then((r) => r.text())
-  .then((t) => {
-    const d = JSON.parse(t.replace('for (;;);', '').split('\\n')[0]);
-    document.getElementById('feed').innerHTML = d.data.marketplace_search.feed_units.edges
-      .filter((e) => e.node.listing)
-      .map((e) => '<a href="/marketplace/item/' + e.node.listing.id + '/">' + e.node.listing.listing_price.formatted_amount + '<br>' + e.node.listing.marketplace_listing_title.replace(/</g, '&lt;') + '</a>')
-      .join('');
-  });
-</script></body></html>`;
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Marketplace | Facebook (demo)</title>${CARD_CSS}</head><body><div id="feed"></div>
+${this.pageScript(u, null)}</body></html>`;
   }
 
   graphqlResponse(body) {
-    const url = new URLSearchParams(body).get('url') || '/marketplace/search/';
-    const { edges } = this.searchEdges(new URL(url, 'http://x'));
+    const form = new URLSearchParams(body);
+    let vars = {};
+    try {
+      vars = JSON.parse(form.get('variables') || '{}');
+    } catch {
+      /* keep empty */
+    }
+    const url = vars.url || form.get('url') || '/marketplace/search/';
+    let offset = 0;
+    try {
+      offset = vars.cursor ? Number(JSON.parse(Buffer.from(String(vars.cursor), 'base64').toString()).o) || 0 : 0;
+    } catch {
+      offset = 0;
+    }
+    const { edges, pageInfo } = this.searchEdges(new URL(url, 'http://x'), offset);
     // Facebook prefixes JSON with "for (;;);" and streams extra records on new lines.
-    return `for (;;);${JSON.stringify({ data: { marketplace_search: { feed_units: { edges, page_info: { has_next_page: true, end_cursor: 'abc' } } } } })}\n{"label":"deferred","data":{}}`;
+    return `for (;;);${JSON.stringify({ data: { marketplace_search: { feed_units: { edges, page_info: pageInfo } } } })}\n{"label":"deferred","data":{}}`;
   }
 
   searchPage(u) {
-    const { edges, query } = this.searchEdges(u);
+    const { edges, pageInfo, query } = this.searchEdges(u, 0);
     const payload = {
       require: [
         [
@@ -351,7 +422,7 @@ fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application
                           result: {
                             data: {
                               marketplace_search: {
-                                feed_units: { edges, page_info: { end_cursor: crypto.randomBytes(12).toString('base64'), has_next_page: true } },
+                                feed_units: { edges, page_info: pageInfo },
                               },
                             },
                             extensions: { is_final: true },
@@ -370,12 +441,13 @@ fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application
     };
     const shell = { require: [['RelayPrefetchedStreamCache', 'next', [], ['adp_preloader_shell', { __bbox: { result: { data: { marketplace_search: { feed_units: { edges: [] } } } } } }]]] };
     const enc = (o) => JSON.stringify(o).replace(/</g, '\\u003C');
-    return `<!DOCTYPE html><html lang="en" id="facebook"><head><meta charset="utf-8"><title>Marketplace – ${escapeHtml(query)} | Facebook (demo)</title></head><body>
-<div id="mount_0_0_xx"><div role="main">Loading…</div></div>
+    return `<!DOCTYPE html><html lang="en" id="facebook"><head><meta charset="utf-8"><title>Marketplace – ${escapeHtml(query)} | Facebook (demo)</title>${CARD_CSS}</head><body>
+<div id="mount_0_0_xx"><div role="main"><div id="feed"></div></div></div>
 <script type="application/json" data-content-len="120" data-sjs>${enc({ define: [['SiteData', [], { server_revision: 1000000 }, 317]] })}</script>
 <script type="application/json" data-content-len="80" data-sjs>${enc(shell)}</script>
 <script>requireLazy(["Bootloader"],function(){});</script>
 <script type="application/json" data-content-len="${enc(payload).length}" data-sjs>${enc(payload)}</script>
+${this.pageScript(u, { edges, page_info: pageInfo })}
 </body></html>`;
   }
 
@@ -409,7 +481,7 @@ fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application
 
   handle(req, res) {
     const u = new URL(req.url, 'http://x');
-    this.requests.push({ at: Date.now(), path: u.pathname + u.search, headers: req.headers });
+    this.requests.push({ at: Date.now(), method: req.method, path: u.pathname + u.search, headers: req.headers });
     if (this.requests.length > 500) this.requests.shift();
     const send = (status, body, type = 'text/html; charset=utf-8', extra = {}) => {
       res.writeHead(status, { 'content-type': type, ...extra });
@@ -451,6 +523,9 @@ fetch('/api/graphql/', { method: 'POST', headers: { 'content-type': 'application
     return send(404, 'Not found');
   }
 }
+
+// Cards tall enough that a page of 24 needs scrolling, like the real feed.
+const CARD_CSS = '<style>#feed{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:12px}.card{display:block;height:260px;background:#eee;border-radius:8px;padding:8px;font:14px sans-serif;color:#111}</style>';
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);

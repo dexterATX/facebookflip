@@ -12,7 +12,7 @@
     "demo": "node tools/demo.js",
     "test": "node --test",
     "accuracy": "node tools/accuracy.js",
-    "setup-browser": "playwright-core install chromium"
+    "setup-browser": "playwright-core install --no-shell chromium"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.4.0",

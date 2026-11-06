@@ -262,8 +262,16 @@ function watchStatus(w) {
   const st = w.lastStatus;
   if (!st) return `<div class="watch-status">${icon('refresh', 'spin')}<span>Waiting for first check…</span></div>`;
   if (st.ok) {
-    const res = st.results === 0 ? 'no matches yet' : `${st.results} results`;
-    return `<div class="watch-status ok">${icon('check')}<span>${esc(agoLong(st.at, now))} · ${esc(res)}</span>${next}</div>`;
+    // Page 1 is read every check; the deeper reads past it happen now and then.
+    const more = w.lastMore && now - w.lastMore.at < 15 * 60e3 ? w.lastMore : null;
+    const total = Math.max(st.results || 0, more?.results || 0);
+    const res = total === 0 ? 'no matches yet' : `${total} results${more && more.pages > 1 ? ` · ${more.pages} pages` : ''}`;
+    const tip = st.moreProblem
+      ? `Only the first page was read: ${st.moreProblem}`
+      : more && more.pages > 1
+        ? `Page 1 is read every check. All ${more.pages} pages were read ${agoLong(more.at, now)}.`
+        : '';
+    return `<div class="watch-status ok"${tip ? ` title="${esc(tip)}"` : ''}>${icon('check')}<span>${esc(agoLong(st.at, now))} · ${esc(res)}${st.moreProblem ? ' · first page only' : ''}</span>${next}</div>`;
   }
   return `<div class="watch-status warn" title="${esc(st.message || '')}">${icon('alert')}<span>${esc(SHORT[st.code] || 'Problem')}</span>${next}</div>`;
 }
@@ -686,13 +694,19 @@ function connectEvents() {
     if (state.logs.length > 120) state.logs.shift();
     if (state.modal === 'activity') renderActivityBody();
   });
+  const refreshDepthNote = () => {
+    const el = state.modal === 'settings' && $('#depth-note');
+    if (el) el.innerHTML = depthNote();
+  };
   on('facebook', (f) => {
     state.facebook = f;
     if (state.modal === 'settings') renderFacebookBox();
+    refreshDepthNote();
   });
   on('settings', (s) => {
     state.settings = s;
     renderSideFoot();
+    refreshDepthNote();
   });
   on('notify', (errors) => {
     state.notifyErrors = errors || {};
@@ -1061,6 +1075,19 @@ function hourOptions(sel) {
   return Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? 'selected' : ''}>${new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' })}</option>`).join('');
 }
 
+/** What "results to read per search" will actually do on this computer. */
+function depthNote() {
+  const s = state.settings;
+  const how =
+    'Facebook shows 24 results at a time and loads more as you scroll. FlipRadar scrolls in a background browser to read more: on a search’s first check, when a burst of new listings comes in, and every 10 minutes for ones Facebook places lower.';
+  if (s.searchPages <= 1) return how;
+  if (s.engine === 'fast') return `${how} <b>Fast only mode reads just the first page.</b> Switch the Facebook connection to Auto to read more.`;
+  if (state.facebook && !state.facebook.browser?.executable) {
+    return `${how} <b>No Chrome or Chromium was found, so only the first page is read.</b> Install Google Chrome, or restart FlipRadar with its start script to download one.`;
+  }
+  return how;
+}
+
 function openSettings() {
   const s = state.settings;
   const n = s.notify;
@@ -1068,6 +1095,14 @@ function openSettings() {
     .map((m) => `<option value="${m}" ${s.maxAlertAgeMin === m ? 'selected' : ''}>${m < 60 ? `${m} minutes` : m === 1440 ? '24 hours (everything new)' : `${m / 60} hour${m > 60 ? 's' : ''}`}${m === 60 ? ' (recommended)' : ''}</option>`)
     .join('');
   const sw = (key, on) => `<span class="switch"><input type="checkbox" data-k="${key}" ${on ? 'checked' : ''}><span></span></span>`;
+  const depths = [
+    [1, 'First page only (24)'],
+    [3, 'Up to 3 pages (72)'],
+    [5, 'Up to 5 pages (120)'],
+    [10, 'As many as possible (up to 240)'],
+  ]
+    .map(([v, label]) => `<option value="${v}" ${s.searchPages === v ? 'selected' : ''}>${label}${v === 10 ? ' (recommended)' : ''}</option>`)
+    .join('');
   openModal(
     'settings',
     `${head('Settings')}
@@ -1136,6 +1171,8 @@ function openSettings() {
 
       <section class="section">
         <h3>${icon('zap')}Smart alert rules</h3>
+        <label class="field"><span>Results to read per search</span><select class="input" data-k="searchPages" data-num>${depths}</select>
+          <small class="hint" id="depth-note">${depthNote()}</small></label>
         <label class="field"><span>Only alert for listings posted within</span><select class="input" data-k="maxAlertAgeMin" data-num>${ages}</select>
           <small class="hint">Facebook sometimes bumps older listings to the top. This keeps those from pinging you.</small></label>
         <div class="toggle-line"><div class="txt"><b>Hide “$1” listings</b><small>Sellers use $1 to mean “message me for the price”. Free items still show.</small></div>${sw('hidePlaceholderPrices', s.hidePlaceholderPrices)}</div>
@@ -1369,7 +1406,7 @@ function renderActivityBody() {
     ${rows.length ? `<table class="log"><thead><tr><th>When</th><th>Watch</th><th>Result</th><th>Time</th></tr></thead><tbody>
       ${rows
         .map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleTimeString())}</td><td>${esc(r.watch)}${r.manual ? ' <span class="eng">(manual)</span>' : ''}</td>
-          <td class="res">${r.code === 'OK' ? `<span class="ok">OK</span> ${r.found} found${r.fresh ? ` · <b>${r.fresh} new</b>` : ''}${r.alerts ? ` · ${r.alerts} alerted` : ''}` : `<span class="bad">${esc(SHORT[r.code] || r.code)}</span><br><small>${esc(r.message || '')}</small>`}
+          <td class="res">${r.code === 'OK' ? `<span class="ok">${r.more ? 'More' : 'OK'}</span> ${r.found} found${r.pages > 1 ? ` on ${r.pages} pages` : ''}${r.fresh ? ` · <b>${r.fresh} new</b>` : ''}${r.alerts ? ` · ${r.alerts} alerted` : ''}${r.more && r.reason ? `<br><small>${esc(r.reason)}</small>` : ''}` : `<span class="bad">${esc(SHORT[r.code] || r.code)}</span><br><small>${esc(r.message || '')}</small>`}
           <div class="eng">${esc(r.engine === 'fast' ? 'fast mode' : r.engine === 'browser' ? (r.fallbackFrom ? `browser, after fast mode got: ${SHORT[r.fallbackFrom] || r.fallbackFrom}` : 'browser') : r.engine || '')}</div></td>
           <td class="num">${r.ms ? `${(r.ms / 1000).toFixed(1)}s` : '—'}</td></tr>`)
         .join('')}

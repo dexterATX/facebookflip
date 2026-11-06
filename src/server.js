@@ -80,6 +80,7 @@ function applySettings(cur, patch) {
   if (typeof patch.cookies === 'string') cur.cookies = patch.cookies.trim().slice(0, 20000);
   if ('maxAlertAgeMin' in patch) cur.maxAlertAgeMin = clamp(Math.round(toNumber(patch.maxAlertAgeMin) || 60), 5, 1440);
   if ('hidePlaceholderPrices' in patch) cur.hidePlaceholderPrices = Boolean(patch.hidePlaceholderPrices);
+  if ('searchPages' in patch && [1, 3, 5, 10].includes(Number(patch.searchPages))) cur.searchPages = Number(patch.searchPages);
   if (patch.deals && typeof patch.deals === 'object') {
     const d = patch.deals;
     const num = (v, lo, hi, dflt) => clamp(toNumber(v) ?? dflt, lo, hi);

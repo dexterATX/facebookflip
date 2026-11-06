@@ -283,3 +283,47 @@ test('speed readout: how long after posting new listings are found, and check ti
   assert.equal(t.monitor.status.speed.foundAfterMin, 4);
   t.cleanup();
 });
+
+test('reading past page 1: when it happens, and failures that are not failed checks', async () => {
+  const t = setup();
+  const page = (n, from = 0) => Array.from({ length: n }, (_, i) => L(500 + from + i, { ageMin: 300 + i, title: `Thing ${from + i}` }));
+  const more = [];
+  t.fb.searchMore = async (url, opts) => {
+    more.push(opts);
+    return more.length === 1 ? ok(page(48)) : { ok: false, code: 'LOGIN_REQUIRED', message: 'Facebook asked for a login.', engine: 'browser', listings: [] };
+  };
+  const w = t.store.addWatch({ name: 'Things', query: 'thing' });
+  const plan = (res, fresh, extra = {}) => t.monitor.morePlan(w, res, { fresh: Array(fresh) }, { firstScan: false, manual: false, now: Date.now(), ...extra });
+
+  // First check: reads past page 1, as far as allowed, and adds what it finds.
+  t.responses.push({ ...ok(page(24)), hasMore: true });
+  await t.monitor.scan(w);
+  assert.equal(more.length, 1);
+  assert.equal(more[0].maxPages, 10);
+  assert.equal(Object.keys(t.store.listings).length, 48);
+  assert.equal(w.lastStatus.pages, 2, 'worked out from the listings when not reported');
+  assert.ok(w.lastMoreAt);
+
+  // The rules.
+  assert.equal(plan({ ...ok(page(24)), hasMore: false }, 24), null, 'Facebook says that was all');
+  assert.equal(plan(ok(page(12)), 12), null, 'a short page has nothing below it');
+  assert.equal(plan({ ...ok(page(24)), hasMore: true }, 2), null, 'a few new ones and a deeper look was recent: page 1 is enough');
+  assert.equal(plan({ ...ok(page(24)), hasMore: true }, 15).reason, 'burst of new listings');
+  assert.equal(plan({ ...ok(page(24)), hasMore: true }, 0, { manual: true }).all, true);
+  w.lastMoreAt = Date.now() - 11 * 60e3;
+  assert.equal(plan({ ...ok(page(24)), hasMore: true }, 0).reason, 'regular deeper look');
+  t.store.settings.searchPages = 1;
+  assert.equal(plan({ ...ok(page(24)), hasMore: true }, 24, { firstScan: true }), null, 'depth set to one page');
+  t.store.settings.searchPages = 10;
+
+  // Facebook wants a login for the deeper read: page 1 still counts as a good check.
+  t.responses.push({ ...ok(page(24, 100)), hasMore: true });
+  await t.monitor.scan(w, { manual: true });
+  assert.equal(w.lastStatus.ok, true);
+  assert.equal(w.failCount, 0);
+  assert.match(w.lastStatus.moreProblem, /login/);
+  assert.ok(w.morePausedUntil > Date.now() + 20 * 60e3, 'tries again in a while, not every check');
+  assert.equal(t.monitor.logs.at(-1).more, true);
+  assert.equal(plan({ ...ok(page(24)), hasMore: true }, 24, { manual: true }), null, 'paused');
+  t.cleanup();
+});

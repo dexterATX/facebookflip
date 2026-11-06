@@ -67,10 +67,33 @@ export const canShowWindow = () =>
   process.platform !== 'linux' || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 
 const IDLE_CLOSE_MS = 10 * 60e3;
+const ITEM_LINKS = 'a[href*="/marketplace/item/"]';
+const RESULTS_OR_LOGIN = `${ITEM_LINKS}, #login_form, form[action*="/login"]`;
+// A Facebook data response that carries listings (a next page of results).
+const LISTING_DATA = /marketplace_listing_title|"feed_units"/;
+
+/** Ids of the listings on the page right now (a card can have several links to the same listing). */
+const itemIds = (page) =>
+  page
+    .$$eval(ITEM_LINKS, (as) => [...new Set(as.map((a) => (/\/marketplace\/item\/(\d+)/.exec(a.getAttribute('href') || '') || [])[1]).filter(Boolean))])
+    .catch(() => []);
+
+/** Visible listing cards, a last-resort source when the page data can't be read. */
+const domCards = (page) =>
+  page
+    .$$eval(ITEM_LINKS, (as) =>
+      as.slice(0, 400).map((a) => ({
+        href: a.href,
+        text: a.innerText || '',
+        img: a.querySelector('img')?.getAttribute('src') || '',
+      })),
+    )
+    .catch(() => []);
 
 export class BrowserEngine {
-  constructor({ profileDir, browserPath = '', fbBase = 'https://www.facebook.com' }) {
+  constructor({ profileDir, browserPath = '', fbBase = 'https://www.facebook.com', scrollPauseMs = 900 }) {
     this.profileDir = profileDir;
+    this.scrollPauseMs = scrollPauseMs; // pause before each scroll, like a person reading
     this.browserPath = browserPath;
     this.fbBase = fbBase;
     this.ctx = null;
@@ -80,6 +103,8 @@ export class BrowserEngine {
     this.idleTimer = null;
     this.appliedCookies = '';
     this.loginActive = false;
+    this.shownUrl = null; // the page currently loaded in the background browser
+    this.scrolled = false; // whether it has been scrolled since it loaded
   }
 
   /** One Chrome profile can only be open once, so all browser work runs one at a time. */
@@ -142,6 +167,7 @@ export class BrowserEngine {
       if (this.ctx === ctx) {
         this.ctx = null;
         this.page = null;
+        this.shownUrl = null;
       }
     });
     this.ctx = ctx;
@@ -178,6 +204,7 @@ export class BrowserEngine {
     const ctx = this.ctx;
     this.ctx = null;
     this.page = null;
+    this.shownUrl = null;
     if (ctx) await ctx.close().catch(() => {});
   }
 
@@ -189,7 +216,7 @@ export class BrowserEngine {
   }
 
   /** Load a search page and capture everything we might parse listings from. */
-  search(url, { cookies = [], waitSelector = 'a[href*="/marketplace/item/"], #login_form, form[action*="/login"]', settleMs = 1200 } = {}) {
+  search(url, { cookies = [], waitSelector = RESULTS_OR_LOGIN, settleMs = 1200 } = {}) {
     return this.run(async () => {
       const t0 = Date.now();
       const page = await this.scanPage();
@@ -202,9 +229,12 @@ export class BrowserEngine {
       let status = 0;
       let docHtml = '';
       try {
+        this.shownUrl = null;
         const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
         status = resp ? resp.status() : 0;
         docHtml = resp ? await resp.text().catch(() => '') : '';
+        this.shownUrl = url;
+        this.scrolled = false;
         await page.waitForSelector(waitSelector, { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(settleMs);
       } finally {
@@ -212,15 +242,6 @@ export class BrowserEngine {
       }
       const liveHtml = await page.content().catch(() => '');
       const extraJson = (await Promise.all(pending)).filter(Boolean);
-      const domCards = await page
-        .$$eval('a[href*="/marketplace/item/"]', (as) =>
-          as.slice(0, 80).map((a) => ({
-            href: a.href,
-            text: a.innerText || '',
-            img: a.querySelector('img')?.getAttribute('src') || '',
-          })),
-        )
-        .catch(() => []);
       const jar = await page.context().cookies(this.fbBase).catch(() => []);
       this.scheduleIdleClose();
       return {
@@ -228,11 +249,126 @@ export class BrowserEngine {
         finalUrl: page.url(),
         html: `${docHtml}\n${liveHtml}`,
         extraJson,
-        domCards,
+        domCards: await domCards(page),
         loggedIn: jar.some((c) => c.name === 'c_user'),
         ms: Date.now() - t0,
       };
     });
+  }
+
+  /**
+   * Read past the first page of results. Facebook shows 24 at a time and
+   * loads the next 24 when you scroll near the bottom, so that's what this
+   * does: scroll, wait for the next batch, repeat. It continues on the page
+   * already open from the last check of this search, or loads it first.
+   *
+   * After each new page, `onPage({ pages, texts, ids })` gets what came in
+   * (Facebook's data responses, and the ids of listings newly on the page)
+   * and returns whether to keep going. Stops at `maxPages` or when nothing
+   * more loads.
+   */
+  scrollMore(url, { cookies = [], maxPages = 10, onPage = async () => true, stepTimeoutMs = 6000, pauseMs = this.scrollPauseMs } = {}) {
+    return this.run(async () => {
+      const t0 = Date.now();
+      const page = await this.scanPage();
+      await this.applyCookies(cookies);
+      const texts = [];
+      let batches = 0; // data responses with listings in them
+      const pending = [];
+      const onResponse = (r) => {
+        if (!r.url().includes('/api/graphql')) return;
+        pending.push(
+          r
+            .text()
+            .then((t) => {
+              texts.push(t);
+              if (LISTING_DATA.test(t)) batches++;
+            })
+            .catch(() => {}),
+        );
+      };
+      page.on('response', onResponse);
+      let status = 200;
+      let docHtml = '';
+      let pages = 1;
+      try {
+        // Continue on the results this check just loaded; otherwise start from the top.
+        if (this.shownUrl !== url || this.scrolled || page.isClosed()) {
+          this.shownUrl = null;
+          const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+          status = resp ? resp.status() : 0;
+          docHtml = resp ? await resp.text().catch(() => '') : '';
+          this.shownUrl = url;
+          await page.waitForSelector(RESULTS_OR_LOGIN, { timeout: 15000 }).catch(() => {});
+          await page.waitForTimeout(600);
+        }
+        this.scrolled = true;
+        await Promise.all(pending);
+        let seenTexts = texts.length;
+        const seenIds = new Set(await itemIds(page));
+        while (pages < maxPages && !this.shutDown) {
+          await page.waitForTimeout(pauseMs + Math.random() * pauseMs); // read like a person, not a machine
+          const before = { batches, cards: seenIds.size };
+          const grew = await this.scrollAndWait(page, async () => batches > before.batches || (await itemIds(page)).length > before.cards, stepTimeoutMs);
+          if (!grew) break; // the end of the results, or Facebook stopped loading more
+          await page.waitForTimeout(400); // let the rest of the batch arrive
+          await Promise.all(pending);
+          pages++;
+          const newTexts = texts.slice(seenTexts);
+          seenTexts = texts.length;
+          const newIds = (await itemIds(page)).filter((id) => !seenIds.has(id));
+          for (const id of newIds) seenIds.add(id);
+          if (!(await onPage({ pages, texts: newTexts, ids: newIds }))) break;
+        }
+      } finally {
+        page.off('response', onResponse);
+      }
+      await Promise.all(pending);
+      const liveHtml = await page.content().catch(() => '');
+      const jar = await page.context().cookies(this.fbBase).catch(() => []);
+      this.scheduleIdleClose();
+      return {
+        status,
+        finalUrl: page.url(),
+        html: `${docHtml}\n${liveHtml}`,
+        extraJson: texts,
+        domCards: await domCards(page),
+        loggedIn: jar.some((c) => c.name === 'c_user'),
+        pages,
+        ms: Date.now() - t0,
+      };
+    });
+  }
+
+  /** Scroll to the bottom and wait until `grew()` says more results came in. */
+  async scrollAndWait(page, grew, timeoutMs) {
+    const toBottom = async () => {
+      await page
+        .evaluate((sel) => {
+          // The last card into view scrolls whatever holds the results (the page or a panel)...
+          const cards = document.querySelectorAll(sel);
+          cards[cards.length - 1]?.scrollIntoView({ block: 'end' });
+          // ...and then the page itself to the very bottom.
+          window.scrollTo(0, document.documentElement.scrollHeight);
+        }, ITEM_LINKS)
+        .catch(() => {});
+      await page.mouse.wheel(0, 300).catch(() => {}); // real wheel events too, for loaders that listen for them
+    };
+    await toBottom();
+    const deadline = Date.now() + timeoutMs;
+    let nudged = false;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      if (await grew()) return true;
+      if (!nudged && deadline - Date.now() < timeoutMs / 2) {
+        // Halfway with nothing: scroll up a little and back, which wakes most lazy loaders.
+        nudged = true;
+        await page.mouse.wheel(0, -700).catch(() => {});
+        await page.waitForTimeout(200);
+        await toBottom();
+      }
+    }
+    return false;
   }
 
   /**

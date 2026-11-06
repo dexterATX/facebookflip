@@ -27,6 +27,12 @@ const GAP_MS = 6000; // default pause between two Facebook checks
 const MAX_BACKOFF_MS = 30 * 60e3;
 const LOG_SIZE = 120;
 const DETAILS_PER_HOUR = 40; // full-listing reads, on top of searches
+// Facebook shows 24 results per page; a page with fewer has nothing below it.
+const FULL_PAGE = 20;
+// How often to read past the first page anyway, for listings Facebook places lower.
+const MORE_EVERY_MS = 10 * 60e3;
+// After reading past page 1 fails (no browser, login wall), wait this long before trying again.
+const MORE_RETRY_MS = 30 * 60e3;
 
 export function inQuietHours(q, date = new Date()) {
   if (!q?.enabled || q.start === q.end) return false;
@@ -116,7 +122,7 @@ export class Monitor extends EventEmitter {
       const min = (l.firstSeenAt - l.creationTime) / 60000;
       if (min >= 0 && min <= 180) found.push(min); // older ones were re-listed, not new
     }
-    const checks = this.logs.filter((x) => x.code === 'OK' && x.ms > 0).slice(-30);
+    const checks = this.logs.filter((x) => x.code === 'OK' && x.ms > 0 && !x.more).slice(-30);
     return {
       foundAfterMin: found.length >= 5 ? Math.round(median(found) * 10) / 10 : null,
       samples: found.length,
@@ -342,7 +348,6 @@ export class Monitor extends EventEmitter {
     const url = buildSearchUrl(watch, this.fbBase);
     const res = await this.fb.search(url, { hadLocation: Boolean(watch.location) });
     const now = Date.now();
-    const settings = this.store.settings;
     const intervalMs = clamp(watch.intervalSec || 180, 60, 3600) * 1000;
 
     if (!this.store.getWatch(watch.id)) return; // deleted while we were checking
@@ -373,10 +378,33 @@ export class Monitor extends EventEmitter {
     this.problem = null;
     watch.failCount = 0;
 
+    // Page 1 first, and its alerts go out right away.
     const firstScan = !watch.baselineAt;
+    const batch = this.ingest(watch, res.listings, { firstScan, now });
+    watch.baselineAt = watch.baselineAt || now;
+    watch.lastScanAt = now;
+    watch.scanCount = (watch.scanCount || 0) + 1;
+    watch.foundCount = (watch.foundCount || 0) + (firstScan ? 0 : batch.fresh.length);
+    watch.nextScanAt = now + jitter(intervalMs, 0.2);
+    watch.lastStatus = { ok: true, code: 'OK', message: res.message, engine: res.engine, at: now, ms: res.ms, results: res.listings.length, pages: 1, fresh: batch.fresh.length, deals: batch.deals };
+    this.addLog({ at: now, watchId: watch.id, watch: watch.name, engine: res.engine, fallbackFrom: res.fallbackFrom || null, code: 'OK', message: res.message, ms: res.ms, found: res.listings.length, pages: 1, fresh: batch.fresh.length, deals: batch.deals, closer: batch.closer, alerts: batch.freshNow.length, manual, url });
+    this.store.save();
+    this.announce(watch, batch);
+
+    // Then, when it pays off, the results past page 1.
+    const plan = this.morePlan(watch, res, batch, { firstScan, manual, now });
+    if (plan) await this.readMore(watch, url, plan, { firstScan, manual });
+  }
+
+  /**
+   * Add a batch of search results to what we know: new listings, price drops,
+   * price memory, verdicts, closer looks and who gets an alert.
+   */
+  ingest(watch, items, { firstScan, now }) {
+    const settings = this.store.settings;
     const fresh = [];
     const drops = [];
-    for (const item of res.listings) {
+    for (const item of items) {
       if (item.sold || item.pending || item.hiddenOnFb || item.live === false) continue;
       const existing = this.store.listings[item.id];
       if (existing) {
@@ -430,18 +458,18 @@ export class Monitor extends EventEmitter {
 
     // Who gets an alert, and who gets a closer look first.
     const freshNow = [];
-    let deep = 0;
+    let closer = 0;
     for (const l of fresh) {
       const eligible = !watch.mute && this.isFreshEnough(l, { firstScan, now });
       if (watch.alertMode === 'all') {
         if (eligible && !l.filtered) freshNow.push(l); // your skip words always win
         if (this.deepOn() && !l.baseline && isCandidate(l.eval, settings.deals)) {
           this.enqueueDeep(l, watch, false);
-          deep++;
+          closer++;
         }
       } else if (this.deepOn() && !l.filtered && isCandidate(l.eval, settings.deals) && (eligible || pileOf(l) === 'deals')) {
         this.enqueueDeep(l, watch, eligible);
-        deep++;
+        closer++;
       } else if (eligible && pileOf(l) === 'deals') {
         freshNow.push(l);
       }
@@ -450,21 +478,78 @@ export class Monitor extends EventEmitter {
     for (const l of [...fresh, ...drops]) this.keepIfDeal(l, watch);
     const dropAlerts =
       watch.mute || watch.alertDrops === false ? [] : drops.filter((l) => watch.alertMode === 'all' || pileOf(l) === 'deals');
+    return { fresh, drops, freshNow, dropAlerts, closer, deals: fresh.filter((l) => pileOf(l) === 'deals').length };
+  }
 
-    watch.baselineAt = watch.baselineAt || now;
-    watch.lastScanAt = now;
-    watch.scanCount = (watch.scanCount || 0) + 1;
-    watch.foundCount = (watch.foundCount || 0) + (firstScan ? 0 : fresh.length);
-    watch.nextScanAt = now + jitter(intervalMs, 0.2);
-    const dealsFound = fresh.filter((l) => pileOf(l) === 'deals').length;
-    watch.lastStatus = { ok: true, code: 'OK', message: res.message, engine: res.engine, at: now, ms: res.ms, results: res.listings.length, fresh: fresh.length, deals: dealsFound };
-    this.addLog({ at: now, watchId: watch.id, watch: watch.name, engine: res.engine, fallbackFrom: res.fallbackFrom || null, code: 'OK', message: res.message, ms: res.ms, found: res.listings.length, fresh: fresh.length, deals: dealsFound, closer: deep, alerts: freshNow.length, manual, url });
-    this.store.save();
-
-    if (fresh.length) this.emit('listings', fresh);
-    if (drops.length) this.emit('updates', drops);
+  /** Tell the dashboard about a batch, and send its alerts. */
+  announce(watch, batch) {
+    if (batch.fresh.length) this.emit('listings', batch.fresh);
+    if (batch.drops.length) this.emit('updates', batch.drops);
     this.emit('watch', watch);
-    if (freshNow.length || dropAlerts.length) this.alert(watch, freshNow, dropAlerts);
+    if (batch.freshNow.length || batch.dropAlerts.length) this.alert(watch, batch.freshNow, batch.dropAlerts);
+  }
+
+  /**
+   * Whether to read past the first page of results this time, and how.
+   * Facebook shows 24 results per page, and its "newest first" order isn't
+   * strict, so new listings can sit lower down. Reading more takes a browser
+   * page load and some scrolling, so it happens when it pays off:
+   *   - the first check of a search, and "Check now": as far as allowed;
+   *   - a burst (page 1 was mostly new, so more new ones are likely below);
+   *   - every 10 minutes, for the ones Facebook placed lower.
+   * Returns null for "not this time".
+   */
+  morePlan(watch, res, batch, { firstScan, manual, now }) {
+    const maxPages = clamp(Math.round(this.store.settings.searchPages || 1), 1, 10);
+    if (maxPages <= 1 || this.stopped || !this.fb.searchMore) return null;
+    if (res.hasMore === false) return null; // Facebook says that was everything
+    if (res.hasMore == null && res.listings.length < FULL_PAGE) return null; // a short page has nothing below it
+    if (now < (watch.morePausedUntil || 0)) return null;
+    if (firstScan || manual) return { maxPages, all: true, reason: firstScan ? 'first check' : 'check now' };
+    if (batch.fresh.length >= Math.max(6, res.listings.length / 2)) return { maxPages, all: false, reason: 'burst of new listings' };
+    if (now - (watch.lastMoreAt || 0) >= MORE_EVERY_MS) return { maxPages, all: false, reason: 'regular deeper look' };
+    return null;
+  }
+
+  /** Read past page 1 (scrolling in the background browser) and add what turns up. */
+  async readMore(watch, url, plan, { firstScan, manual }) {
+    const res = await this.fb.searchMore(url, {
+      hadLocation: Boolean(watch.location),
+      maxPages: plan.maxPages,
+      isNew: (id) => !this.store.listings[id],
+      // "As far as allowed" keeps going while pages have listings; otherwise
+      // only while they keep turning up new ones.
+      keepGoing: ({ size, fresh }) => size > 0 && (plan.all || fresh > 0),
+    });
+    const now = Date.now();
+    if (!this.store.getWatch(watch.id) || this.stopped) return;
+    watch.lastMoreAt = now;
+    const base = { at: now, watchId: watch.id, watch: watch.name, engine: res.engine, ms: res.ms, more: true, reason: plan.reason, manual, url };
+    if (!res.ok) {
+      // Page 1 worked, so this isn't a failed check: note it on the watch and try again later.
+      watch.morePausedUntil = now + MORE_RETRY_MS;
+      watch.lastStatus = { ...watch.lastStatus, moreProblem: res.message };
+      if (res.code !== 'NO_BROWSER') this.addLog({ ...base, code: res.code, message: `Couldn't read past the first page: ${res.message}`, found: 0, fresh: 0 });
+      this.store.save();
+      this.emit('watch', watch);
+      return;
+    }
+    const batch = this.ingest(watch, res.listings, { firstScan, now });
+    const pages = res.pages || Math.max(1, Math.ceil(res.listings.length / 24));
+    const last = watch.lastStatus || {};
+    watch.foundCount = (watch.foundCount || 0) + (firstScan ? 0 : batch.fresh.length);
+    watch.lastStatus = {
+      ...last,
+      results: Math.max(last.results || 0, res.listings.length),
+      pages,
+      fresh: (last.fresh || 0) + batch.fresh.length,
+      deals: (last.deals || 0) + batch.deals,
+      moreProblem: null,
+    };
+    watch.lastMore = { at: now, pages, results: res.listings.length };
+    this.addLog({ ...base, code: 'OK', message: 'More results', found: res.listings.length, pages, fresh: batch.fresh.length, deals: batch.deals, closer: batch.closer, alerts: batch.freshNow.length });
+    this.store.save();
+    this.announce(watch, batch);
   }
 
   isFreshEnough(l, { firstScan, now }) {

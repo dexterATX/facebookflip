@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS = {
   engine: 'auto', // 'auto' | 'fast' | 'browser'
   cookies: '', // optional Facebook cookies (Settings > Advanced)
   maxAlertAgeMin: 60, // only alert on listings posted within this many minutes
+  searchPages: 10, // read up to this many pages of results (Facebook shows 24 per page)
   hidePlaceholderPrices: true, // hide "$1" bait listings
   quietHours: { enabled: false, start: 1, end: 6 },
   deals: { ...DEFAULT_DEAL_RULES },

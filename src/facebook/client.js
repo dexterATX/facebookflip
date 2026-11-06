@@ -25,6 +25,9 @@ export const MESSAGES = {
   BROWSER_ERROR: 'The background browser had a problem.',
 };
 
+// Facebook shows this many results per page.
+export const PAGE_SIZE = 24;
+
 // Problems that a second try with the real browser will not fix.
 const FINAL = new Set(['RATE_LIMITED', 'BAD_LOCATION', 'NETWORK', 'INELIGIBLE']);
 
@@ -44,7 +47,9 @@ export function classify(raw, { engine, hadLocation = false, base } = {}) {
     loginForm: Boolean(a.signals.loginForm),
     rateLimited: Boolean(a.signals.rateLimited || b.signals.rateLimited),
   };
-  const meta = { engine, status, finalUrl, ms };
+  // Whether Facebook says there are more results past these (null = it didn't say).
+  const hasMore = b.signals.hasMore ?? a.signals.hasMore ?? null;
+  const meta = { engine, status, finalUrl, ms, hasMore };
   if (listings.length) return { ok: true, code: 'OK', message: 'OK', listings, ...meta };
 
   let pathname = '';
@@ -73,6 +78,7 @@ export class FacebookClient {
       profileDir: path.join(config.dataDir, 'browser-profile'),
       browserPath: config.browserPath,
       fbBase: config.fbBase,
+      scrollPauseMs: config.scrollPauseMs,
     });
     this.jar = new CookieJar(store.data.facebook.guestCookies || []);
     this.httpPausedUntil = 0;
@@ -114,16 +120,69 @@ export class FacebookClient {
   async viaBrowser(url, hadLocation) {
     try {
       const raw = await this.gated(() => this.browser.search(url, { cookies: this.userCookies() }));
-      const fbState = this.store.data.facebook;
-      if (raw.loggedIn && !fbState.connected) Object.assign(fbState, { connected: true, connectedAt: Date.now() });
-      const res = classify(raw, { engine: 'browser', hadLocation, base: this.base });
-      if (res.code === 'LOGIN_REQUIRED' && fbState.connected) {
-        fbState.connected = false;
-        res.message = 'The saved Facebook login has expired. Reconnect in Settings.';
-      }
-      return res;
+      return this.fromBrowser(raw, hadLocation);
     } catch (e) {
       return fail('BROWSER_ERROR', { engine: 'browser', message: `${MESSAGES.BROWSER_ERROR} (${e.message.split('\n')[0]})` });
+    }
+  }
+
+  /** Read what the background browser loaded, and keep track of whether it's logged in. */
+  fromBrowser(raw, hadLocation) {
+    const fbState = this.store.data.facebook;
+    if (raw.loggedIn && !fbState.connected) Object.assign(fbState, { connected: true, connectedAt: Date.now() });
+    const res = classify(raw, { engine: 'browser', hadLocation, base: this.base });
+    if (res.code === 'LOGIN_REQUIRED' && fbState.connected) {
+      fbState.connected = false;
+      res.message = 'The saved Facebook login has expired. Reconnect in Settings.';
+    }
+    return res;
+  }
+
+  /** Reading past the first page needs the background browser (and not "Fast only" mode). */
+  async canReadMore() {
+    return this.store.settings.engine !== 'fast' && (await this.browser.isAvailable());
+  }
+
+  /**
+   * More results for a search, past the first page. Facebook shows 24 at a
+   * time and loads the next 24 as you scroll, so this scrolls the search in
+   * the background browser, like a person would.
+   *
+   * After each new page, `keepGoing({ pages, size, fresh })` decides whether
+   * to load another: `size` is how many listings that page added and `fresh`
+   * how many of them `isNew(id)`. Returns every listing it saw, page 1 included.
+   */
+  async searchMore(url, { hadLocation = false, maxPages = 10, keepGoing = () => true, isNew = () => true } = {}) {
+    if (!(await this.canReadMore())) {
+      return fail('NO_BROWSER', {
+        engine: 'browser',
+        pages: 1,
+        message:
+          this.store.settings.engine === 'fast'
+            ? 'Fast only mode reads the first page of results (24). Switch Settings > Facebook connection to Auto to read more.'
+            : 'Reading past the first 24 results needs Google Chrome or Chromium. Install one, or run "npm run setup-browser".',
+      });
+    }
+    const seen = new Set(); // listings past page 1
+    let more = null;
+    const onPage = async ({ pages, texts, ids: cardIds = [] }) => {
+      const got = extractFromJsonTexts(texts, { base: this.base });
+      const ids = new Set([...got.listings.map((l) => l.id), ...cardIds]);
+      if (got.signals.hasMore !== null) more = got.signals.hasMore;
+      const added = [...ids].filter((id) => !seen.has(id));
+      for (const id of added) seen.add(id);
+      const wanted = await keepGoing({ pages, size: added.length, fresh: added.filter((id) => isNew(id)).length });
+      // One scroll can bring in more than one page, so count listings, not scrolls.
+      return Boolean(wanted) && more !== false && 1 + Math.ceil(seen.size / PAGE_SIZE) < maxPages;
+    };
+    try {
+      const raw = await this.gated(() => this.browser.scrollMore(url, { cookies: this.userCookies(), maxPages, onPage }));
+      const res = this.fromBrowser(raw, hadLocation);
+      res.pages = Math.max(raw.pages || 1, 1 + Math.ceil(seen.size / PAGE_SIZE));
+      if (more !== null) res.hasMore = more;
+      return res;
+    } catch (e) {
+      return fail('BROWSER_ERROR', { engine: 'browser', pages: 1, message: `${MESSAGES.BROWSER_ERROR} (${e.message.split('\n')[0]})` });
     }
   }
 

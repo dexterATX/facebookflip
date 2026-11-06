@@ -77,7 +77,8 @@ export function parseJsonStream(text) {
 
 function collect(docs, base) {
   const raws = [];
-  const signals = { noResults: false, feed: false, rateLimited: false };
+  // hasMore: Facebook's own "is there a next page" flag for the results (null = not seen).
+  const signals = { noResults: false, feed: false, rateLimited: false, hasMore: null };
   for (const d of docs) walk(d, false, 0, raws, signals);
   const byId = new Map();
   for (const raw of raws) {
@@ -101,6 +102,8 @@ function walk(node, inAd, depth, out, signals) {
     else if (tn === 'MarketplaceSearchFeedNoResults') signals.noResults = true;
   }
   if ('feed_units' in node || 'marketplace_search' in node) signals.feed = true;
+  const info = node.feed_units?.page_info;
+  if (info && typeof info.has_next_page === 'boolean') signals.hasMore = info.has_next_page;
   if (Array.isArray(node.errors) && node.errors.some((e) => /1675004|rate limit/i.test(JSON.stringify(e)))) {
     signals.rateLimited = true;
   }

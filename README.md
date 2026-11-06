@@ -12,6 +12,7 @@ FlipRadar watches the Marketplace searches you care about, newest first. Every n
 ## What it does
 
 - **Fast.** Each search is checked every 3 minutes by default (you can pick 1 to 60). New listings reach your phone a few seconds after the check that finds them.
+- **Reads past the first 24.** Facebook shows 24 results at a time and loads more as you scroll. FlipRadar scrolls too, so it sees up to 240 results per search. See [Reading more than 24 results](#reading-more-than-24-results).
 - **Phone alerts.** Free [ntfy](https://ntfy.sh) app (no sign-up), Discord or Telegram. Each alert shows the price, title, photo and how long ago it was posted, and opens the listing when tapped.
 - **Smart filters.**
   - Skips listings with words you don't want ("broken", "for parts", "ISO"…), with one click to add common junk words.
@@ -126,6 +127,22 @@ How quickly you hear about a listing depends on three things:
 
 So expect most alerts within about **1–5 minutes** of a listing appearing. A 1–2 minute interval gets you there sooner, at a higher chance of Facebook slowing you down. The meter under your watches shows your total checks per hour: **Gentle** (≤60), **Moderate** (≤120) or **Heavy**.
 
+## Reading more than 24 results
+
+Facebook puts the first 24 results in the search page and loads the next 24 each time you scroll near the bottom. Its "newest first" order isn't strict either: a brand-new listing sometimes lands on page 2 or 3. So FlipRadar scrolls the search in a background browser, like a person would, and adds everything it finds.
+
+To stay quick and gentle, every check reads page 1 first and sends its alerts right away. It goes deeper when that pays off:
+
+- **The first check of a search, and "Check now":** every page, up to your limit.
+- **A burst:** when most of page 1 is new, more new ones are almost certainly below, so it reads on right away.
+- **Every 10 minutes:** a deeper look for listings Facebook placed lower.
+
+It stops early once a page brings nothing new, and immediately when Facebook says there are no more results. A search with fewer than 24 results never needs the browser.
+
+- **The limit** is in Settings → Smart alert rules → **Results to read per search**: first page only (24), up to 3, 5, or 10 pages (240, the default).
+- **It needs Chrome, Edge, Chromium or Brave.** If none is installed, the start script downloads Chromium once (about 170 MB). Without a browser, or in **Fast only** mode, FlipRadar reads the first page and the watch says "first page only".
+- **The Activity log** (pulse icon) shows each deeper read: how many pages, how many new, and why it ran.
+
 ## Facebook access, honestly
 
 Facebook has **no public Marketplace API** (official way for apps to request data). FlipRadar reads the same search page your browser does. That means:
@@ -174,14 +191,15 @@ While the dashboard is open, it also plays a sound and can show desktop notifica
 - **"Facebook wants a login"**: click **Connect Facebook** in the banner (or paste cookies on a server).
 - **"Location not recognized"**: edit the watch and paste a Marketplace search link instead of typing the city.
 - **"Empty page from Facebook"**: this happens now and then. FlipRadar retries automatically. If it keeps happening, switch Settings → Facebook connection to **Auto** or **Browser only**.
-- **"No browser found"**: install Google Chrome, or run `npm run setup-browser` to download Chromium.
+- **"No browser found" or "first page only"**: install Google Chrome, or run `npm run setup-browser` to download Chromium. In Settings, the Facebook connection should be **Auto** or **Browser only**, not Fast only.
 - **"Port 3000 is already in use"**: FlipRadar is probably already running. Otherwise start it with `PORT=3001`.
 - **No phone alerts**: open Settings and tap **Send test**. Any error shows next to the channel name.
 
 ## How it works (for the curious)
 
 - **Search:** every watch becomes a Marketplace search link forced to *Date listed: newest first* and *last 24 hours*, so new posts are always on page one.
-- **Reading listings:** Facebook embeds the first page of results as JSON (structured data) inside the page. Instead of trusting one fixed path through that data, FlipRadar walks all of it and keeps every object shaped like a listing: one with an `id` and a `marketplace_listing_title`. It skips sponsored stories. In browser mode, it also reads Facebook's own data responses, and as a last resort the visible listing cards. See `src/facebook/extract.js`.
+- **Reading listings:** Facebook embeds the first page of results (24) as JSON (structured data) inside the page, and loads the rest with its own data requests as you scroll. Instead of trusting one fixed path through that data, FlipRadar walks all of it and keeps every object shaped like a listing: one with an `id` and a `marketplace_listing_title`. It skips sponsored stories. In browser mode, it also reads Facebook's own data responses, and as a last resort the visible listing cards. See `src/facebook/extract.js`.
+- **More pages:** `scrollMore` in `src/facebook/browser.js` scrolls and waits for each next batch; `morePlan` and `readMore` in `src/monitor.js` decide when it's worth it and add what turns up.
 - **Fast mode** sends the same headers Chrome sends when opening a page, and keeps Facebook's guest cookie like a returning visitor (`src/facebook/http.js`). **Browser mode** drives your installed Chrome or Edge with its own profile (`src/facebook/browser.js`).
 - **New vs. old:** the first check of a watch is a quiet baseline. After that, a listing alerts if FlipRadar hasn't seen it before *and* it was posted within your alert window, 60 minutes by default (`src/monitor.js`).
 - **Deals:** red flags, resale estimate, profit math and the verdict live in `src/evaluate.js`. The price guide matcher is `src/priceguide.js`. The closer look (full listing, then AI) runs in `src/monitor.js`, and the optional AI is in `src/ai.js`.
