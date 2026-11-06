@@ -9,6 +9,9 @@ import { DEFAULT_DEAL_RULES } from './evaluate.js';
 import { DEFAULT_AI_MODEL } from './ai.js';
 import { DEFAULT_AREA } from './area.js';
 
+// Bumped when saved data needs upgrading on load (see load()).
+const DATA_VERSION = 2;
+
 export const DEFAULT_SETTINGS = {
   cookies: '', // your Facebook cookies: how FlipRadar signs in (Settings > Facebook cookies)
   maxAlertAgeMin: 60, // only alert on listings posted within this many minutes
@@ -190,14 +193,25 @@ export class Store {
     const d = raw && typeof raw === 'object' ? raw : {};
     const settings = deepMerge(structuredClone(DEFAULT_SETTINGS), d.settings);
     if (!settings.notify.ntfy.topic) settings.notify.ntfy.topic = `flipradar-${randomId(14)}`;
+    const facebook = d.facebook && typeof d.facebook === 'object' ? d.facebook : {};
+    if ((d.version || 1) < DATA_VERSION) {
+      // Saved by an earlier FlipRadar. Cookies are the only way in now, so
+      // there's no engine to pick or browser login to remember...
+      delete settings.engine;
+      delete facebook.connected;
+      delete facebook.guestCookies;
+      // ...and the cursor is followed to the end: "10 pages" was the most
+      // there was before, and the most now is all of them.
+      if (settings.searchPages === 10) settings.searchPages = 50;
+    }
     return {
-      version: 1,
+      version: DATA_VERSION,
       settings,
       watches: Array.isArray(d.watches) ? d.watches : [],
       listings: d.listings && typeof d.listings === 'object' ? d.listings : {},
       comps: Array.isArray(d.comps) ? d.comps : [],
       aiUsage: d.aiUsage && typeof d.aiUsage === 'object' ? d.aiUsage : null,
-      facebook: d.facebook && typeof d.facebook === 'object' ? d.facebook : { connected: false },
+      facebook, // your cookies as Facebook last updated them, whose they are, and how the next pages were asked for
       rulesVersion: typeof d.rulesVersion === 'string' ? d.rulesVersion : null, // deal rules the saved verdicts came from
     };
   }

@@ -249,6 +249,27 @@ test('quiet hours wrap around midnight', () => {
   assert.equal(inQuietHours({ ...q, enabled: false }, at(3)), false);
 });
 
+test('settings saved by the previous version are upgraded once', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-store-'));
+  const file = path.join(dir, 'db.json');
+  const old = (searchPages) => JSON.stringify({ version: 1, settings: { engine: 'auto', searchPages, cookies: 'c_user=1; xs=2' }, facebook: { connected: true, guestCookies: [{ name: 'datr', value: 'x' }] }, watches: [] });
+  fs.writeFileSync(file, old(10));
+  let s = new Store(file);
+  assert.equal(s.settings.searchPages, 50, 'the old "most" (10 pages) becomes "all of them"');
+  assert.equal('engine' in s.settings, false);
+  assert.deepEqual(Object.keys(s.data.facebook), [], 'nothing left from the old sign-in modes');
+  assert.equal(s.settings.cookies, 'c_user=1; xs=2', 'your cookies carry over');
+  assert.deepEqual(s.settings.area, { location: '', label: '', radiusMi: 0, pickupOnly: true, states: [], autoStates: true }, 'your area starts out unset, pickup only');
+  fs.writeFileSync(file, old(3));
+  s = new Store(file);
+  assert.equal(s.settings.searchPages, 3, 'a smaller depth you picked stays');
+  // Once upgraded, a 10 you pick later is left alone.
+  s.settings.searchPages = 10;
+  s.flush();
+  assert.equal(new Store(file).settings.searchPages, 10);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('store survives a corrupt file and writes atomically', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-store-'));
   const file = path.join(dir, 'db.json');
