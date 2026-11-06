@@ -18,7 +18,8 @@ const MAX_DEPTH = 400;
 // ---------------------------------------------------------------------------
 // Entry points
 
-export function extractFromHtml(html, { base } = {}) {
+/** The JSON documents a page carries in <script type="application/json"> tags. */
+export function jsonScripts(html) {
   const docs = [];
   for (const m of String(html).matchAll(SCRIPT_RE)) {
     if (!JSON_TYPE_RE.test(m[1])) continue;
@@ -30,6 +31,11 @@ export function extractFromHtml(html, { base } = {}) {
       /* not JSON after all */
     }
   }
+  return docs;
+}
+
+export function extractFromHtml(html, { base } = {}) {
+  const docs = jsonScripts(html);
   let result = collect(docs, base);
   if (!result.listings.length) {
     // Some page variants inline the payload in an ordinary script. Cut the
@@ -77,8 +83,9 @@ export function parseJsonStream(text) {
 
 function collect(docs, base) {
   const raws = [];
-  // hasMore: Facebook's own "is there a next page" flag for the results (null = not seen).
-  const signals = { noResults: false, feed: false, rateLimited: false, hasMore: null };
+  // hasMore / cursor: Facebook's "is there a next page" flag for the results, and
+  // the bookmark to ask for it with (null = not seen).
+  const signals = { noResults: false, feed: false, rateLimited: false, hasMore: null, cursor: null };
   for (const d of docs) walk(d, false, 0, raws, signals);
   const byId = new Map();
   for (const raw of raws) {
@@ -103,7 +110,10 @@ function walk(node, inAd, depth, out, signals) {
   }
   if ('feed_units' in node || 'marketplace_search' in node) signals.feed = true;
   const info = node.feed_units?.page_info;
-  if (info && typeof info.has_next_page === 'boolean') signals.hasMore = info.has_next_page;
+  if (info && typeof info.has_next_page === 'boolean') {
+    signals.hasMore = info.has_next_page;
+    signals.cursor = typeof info.end_cursor === 'string' && info.end_cursor ? info.end_cursor : null;
+  }
   if (Array.isArray(node.errors) && node.errors.some((e) => /1675004|rate limit/i.test(JSON.stringify(e)))) {
     signals.rateLimited = true;
   }

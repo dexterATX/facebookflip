@@ -1,12 +1,12 @@
-// "Browser mode": drive a real Chrome/Edge/Chromium with its own saved profile.
+// The background browser: a fallback for reading past page 1.
 //
-// This is the most reliable way to read Marketplace: Facebook sees an ordinary
-// browser, and once you log in through the window we open, the session is
-// saved in data/browser-profile and reused for every check.
+// FlipRadar normally follows Facebook's cursor with plain web requests. If
+// that stops working (Facebook changed something), it opens the search in a
+// hidden Chrome/Edge/Chromium, signed in with the same cookies, and scrolls
+// it the way a person would, picking up each next page as it loads.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { sleep, log } from '../util.js';
 
 let chromiumModule; // undefined = not loaded yet, null = not installed
 async function loadChromium() {
@@ -62,10 +62,6 @@ export async function findBrowser(explicit) {
   return null;
 }
 
-/** A login window needs a screen. Linux servers and Docker usually have none. */
-export const canShowWindow = () =>
-  process.platform !== 'linux' || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
-
 const IDLE_CLOSE_MS = 10 * 60e3;
 const ITEM_LINKS = 'a[href*="/marketplace/item/"]';
 const RESULTS_OR_LOGIN = `${ITEM_LINKS}, #login_form, form[action*="/login"]`;
@@ -102,7 +98,6 @@ export class BrowserEngine {
     this.lock = Promise.resolve();
     this.idleTimer = null;
     this.appliedCookies = '';
-    this.loginActive = false;
     this.shownUrl = null; // the page currently loaded in the background browser
     this.scrolled = false; // whether it has been scrolled since it loaded
   }
@@ -117,13 +112,7 @@ export class BrowserEngine {
   async status() {
     const chromium = await loadChromium();
     const executable = chromium ? await findBrowser(this.browserPath) : null;
-    return {
-      installed: Boolean(chromium),
-      executable,
-      canShowWindow: canShowWindow(),
-      loginActive: this.loginActive,
-      hasProfile: fs.existsSync(this.profileDir),
-    };
+    return { installed: Boolean(chromium), executable };
   }
 
   async isAvailable() {
@@ -131,7 +120,8 @@ export class BrowserEngine {
     return s.installed && Boolean(s.executable);
   }
 
-  async launch({ headless }) {
+  /** A hidden browser that presents itself as ordinary Chrome. */
+  async launch() {
     const chromium = await loadChromium();
     if (!chromium) throw new Error('The browser helper is missing. Run "npm install" in the app folder.');
     const executablePath = await findBrowser(this.browserPath);
@@ -139,13 +129,12 @@ export class BrowserEngine {
       throw new Error('No Chrome, Edge or Chromium was found. Install Google Chrome, or run "npm run setup-browser".');
     }
     fs.mkdirSync(this.profileDir, { recursive: true });
-    const args = ['--no-first-run', '--no-default-browser-check', '--disable-features=Translate,MediaRouter'];
-    // Skip downloading photos while checking in the background: saves a lot of data.
-    if (headless) args.push('--blink-settings=imagesEnabled=false');
-    const opts = { headless, executablePath, args, locale: 'en-US', viewport: headless ? { width: 1280, height: 900 } : null };
-    if (headless && this.ua) opts.userAgent = this.ua;
+    // No photos: they aren't needed to read listings, and skipping them saves a lot of data.
+    const args = ['--no-first-run', '--no-default-browser-check', '--disable-features=Translate,MediaRouter', '--blink-settings=imagesEnabled=false'];
+    const opts = { headless: true, executablePath, args, locale: 'en-US', viewport: { width: 1280, height: 900 } };
+    if (this.ua) opts.userAgent = this.ua;
     let ctx = await chromium.launchPersistentContext(this.profileDir, opts);
-    if (headless && !this.ua) {
+    if (!this.ua) {
       // Headless Chrome calls itself "HeadlessChrome". Present the normal name instead.
       const page = ctx.pages()[0] || (await ctx.newPage());
       const ua = await page.evaluate(() => navigator.userAgent);
@@ -162,7 +151,7 @@ export class BrowserEngine {
     if (this.shutDown) throw new Error('FlipRadar is shutting down.');
     if (this.ctx && this.page && !this.page.isClosed()) return this.page;
     await this.closeNow();
-    const ctx = await this.launch({ headless: true });
+    const ctx = await this.launch();
     ctx.on('close', () => {
       if (this.ctx === ctx) {
         this.ctx = null;
@@ -176,21 +165,26 @@ export class BrowserEngine {
     return this.page;
   }
 
+  /** Sign the browser in with exactly these cookies: nothing left over from an earlier session. */
   async applyCookies(cookies) {
     const key = JSON.stringify(cookies);
-    if (!cookies.length || key === this.appliedCookies) return;
+    if (key === this.appliedCookies) return;
+    await this.ctx.clearCookies();
     const domain = new URL(this.fbBase).hostname.replace(/^www\./, '.');
-    await this.ctx.addCookies(
-      cookies.map((c) => ({
-        name: c.name,
-        value: c.value,
-        domain,
-        path: '/',
-        secure: this.fbBase.startsWith('https'),
-        sameSite: 'None',
-        expires: Math.floor(Date.now() / 1000) + 180 * 86400,
-      })),
-    );
+    if (cookies.length) {
+      await this.ctx.addCookies(
+        cookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain,
+          path: '/',
+          // Facebook's session cookies are SameSite=None, which browsers only accept on https.
+          secure: this.fbBase.startsWith('https'),
+          sameSite: this.fbBase.startsWith('https') ? 'None' : 'Lax',
+          expires: Math.floor(Date.now() / 1000) + 180 * 86400,
+        })),
+      );
+    }
     this.appliedCookies = key;
   }
 
@@ -213,47 +207,6 @@ export class BrowserEngine {
     this.shutDown = true;
     clearTimeout(this.idleTimer);
     return this.run(() => this.closeNow());
-  }
-
-  /** Load a search page and capture everything we might parse listings from. */
-  search(url, { cookies = [], waitSelector = RESULTS_OR_LOGIN, settleMs = 1200 } = {}) {
-    return this.run(async () => {
-      const t0 = Date.now();
-      const page = await this.scanPage();
-      await this.applyCookies(cookies);
-      const pending = [];
-      const onResponse = (r) => {
-        if (r.url().includes('/api/graphql')) pending.push(r.text().catch(() => ''));
-      };
-      page.on('response', onResponse);
-      let status = 0;
-      let docHtml = '';
-      try {
-        this.shownUrl = null;
-        const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        status = resp ? resp.status() : 0;
-        docHtml = resp ? await resp.text().catch(() => '') : '';
-        this.shownUrl = url;
-        this.scrolled = false;
-        await page.waitForSelector(waitSelector, { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(settleMs);
-      } finally {
-        page.off('response', onResponse);
-      }
-      const liveHtml = await page.content().catch(() => '');
-      const extraJson = (await Promise.all(pending)).filter(Boolean);
-      const jar = await page.context().cookies(this.fbBase).catch(() => []);
-      this.scheduleIdleClose();
-      return {
-        status,
-        finalUrl: page.url(),
-        html: `${docHtml}\n${liveHtml}`,
-        extraJson,
-        domCards: await domCards(page),
-        loggedIn: jar.some((c) => c.name === 'c_user'),
-        ms: Date.now() - t0,
-      };
-    });
   }
 
   /**
@@ -325,7 +278,8 @@ export class BrowserEngine {
       }
       await Promise.all(pending);
       const liveHtml = await page.content().catch(() => '');
-      const jar = await page.context().cookies(this.fbBase).catch(() => []);
+      // Facebook refreshes some cookies as you browse; hand them back so they're kept.
+      const cookiesNow = await page.context().cookies(this.fbBase).catch(() => []);
       this.scheduleIdleClose();
       return {
         status,
@@ -333,7 +287,7 @@ export class BrowserEngine {
         html: `${docHtml}\n${liveHtml}`,
         extraJson: texts,
         domCards: await domCards(page),
-        loggedIn: jar.some((c) => c.name === 'c_user'),
+        cookies: cookiesNow.map(({ name, value }) => ({ name, value })),
         pages,
         ms: Date.now() - t0,
       };
@@ -369,59 +323,5 @@ export class BrowserEngine {
       }
     }
     return false;
-  }
-
-  /**
-   * Open a visible browser window on the Facebook login page and wait (up to
-   * 15 minutes) for the person to log in. The session stays in the profile.
-   */
-  connect() {
-    return this.run(async () => {
-      await this.closeNow();
-      if (!canShowWindow()) {
-        throw new Error('This computer has no screen for a login window (Docker or a server). Paste cookies in Advanced instead.');
-      }
-      this.loginActive = true;
-      let ctx;
-      try {
-        ctx = await this.launch({ headless: false });
-        let closed = false;
-        ctx.on('close', () => {
-          closed = true;
-        });
-        const page = ctx.pages()[0] || (await ctx.newPage());
-        await page.goto(`${this.fbBase}/login/`, { waitUntil: 'domcontentloaded' }).catch(() => {});
-        const deadline = Date.now() + 15 * 60e3;
-        let ok = false;
-        while (!closed && Date.now() < deadline) {
-          const jar = await ctx.cookies(this.fbBase).catch(() => null);
-          if (!jar) break;
-          if (jar.some((c) => c.name === 'c_user')) {
-            ok = true;
-            // Show Marketplace so the person can see it worked, then let cookies settle.
-            await page.goto(`${this.fbBase}/marketplace/`, { waitUntil: 'domcontentloaded' }).catch(() => {});
-            await sleep(3000);
-            break;
-          }
-          await sleep(1500);
-        }
-        return { ok, cancelled: !ok && closed };
-      } finally {
-        this.loginActive = false;
-        if (ctx) await ctx.close().catch(() => {});
-      }
-    });
-  }
-
-  /** Forget the saved Facebook session entirely. */
-  disconnect() {
-    return this.run(async () => {
-      await this.closeNow();
-      try {
-        fs.rmSync(this.profileDir, { recursive: true, force: true });
-      } catch (e) {
-        log.warn(`Could not delete the browser profile: ${e.message}`);
-      }
-    });
   }
 }

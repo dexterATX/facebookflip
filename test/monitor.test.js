@@ -252,9 +252,9 @@ test('quiet hours wrap around midnight', () => {
 test('store survives a corrupt file and writes atomically', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-store-'));
   const file = path.join(dir, 'db.json');
-  fs.writeFileSync(file, '{"settings": {"engine": "fast"');
+  fs.writeFileSync(file, '{"settings": {"searchPages": 3');
   const s = new Store(file);
-  assert.equal(s.settings.engine, 'auto');
+  assert.equal(s.settings.searchPages, 50, 'a broken file starts over from the defaults');
   assert.equal(s.settings.deals.minProfit, 40);
   assert.equal(s.settings.ai.enabled, false);
   assert.match(s.settings.notify.ntfy.topic, /^flipradar-[a-z2-9]{14}$/);
@@ -299,7 +299,7 @@ test('reading past page 1: when it happens, and failures that are not failed che
   t.responses.push({ ...ok(page(24)), hasMore: true });
   await t.monitor.scan(w);
   assert.equal(more.length, 1);
-  assert.equal(more[0].maxPages, 10);
+  assert.equal(more[0].maxPages, 50, 'to the end of the results');
   assert.equal(Object.keys(t.store.listings).length, 48);
   assert.equal(w.lastStatus.pages, 2, 'worked out from the listings when not reported');
   assert.ok(w.lastMoreAt);

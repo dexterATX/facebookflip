@@ -10,6 +10,8 @@ const sortKey = (l) => l.creationTime || l.firstSeenAt || 0;
 const pileOf = (l) => l.pileOverride || l.pile || 'unsorted';
 const isDeal = (l) => pileOf(l) === 'deals';
 const PAGE = 120;
+// The distances Facebook offers, in miles (same list as src/area.js).
+const RADIUS_MI = [1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500];
 const SECRET = '••••••••';
 const narrow = window.matchMedia('(max-width: 600px)');
 
@@ -47,7 +49,7 @@ const debounce = (fn, ms) => {
 };
 
 const SHORT = {
-  LOGIN_REQUIRED: 'Facebook wants a login',
+  LOGIN_REQUIRED: 'Cookies not accepted: paste fresh ones',
   CHECKPOINT: 'Facebook security check needed',
   RATE_LIMITED: 'Facebook asked us to slow down',
   BAD_LOCATION: 'Location not recognized',
@@ -55,7 +57,8 @@ const SHORT = {
   EMPTY: 'Empty page from Facebook, retrying',
   HTTP_ERROR: 'Facebook error page',
   NETWORK: 'No connection to Facebook',
-  NO_BROWSER: 'No browser found',
+  NO_COOKIES: 'Needs your Facebook cookies',
+  NO_PAGING: 'Only page 1 this time',
   BROWSER_ERROR: 'Background browser problem',
 };
 
@@ -189,6 +192,9 @@ function renderLive() {
       text = `Checking “${watchById(s.scanning)?.name || '…'}”`;
     } else if (s.state === 'idle') {
       text = state.watches.length ? 'All watches paused' : 'Add a watch to start';
+    } else if (s.state === 'needs-cookies') {
+      cls = 'cooldown';
+      text = 'Waiting for your Facebook cookies';
     } else if (s.state === 'cooldown') {
       cls = 'cooldown';
       text = `Paused · resumes in ${countdown((s.cooldownUntil || now) - now)}`;
@@ -214,18 +220,23 @@ function renderLive() {
 function renderBanner() {
   const el = $('#banner');
   const p = state.status?.problem;
+  if (state.facebook?.needsCookies && !state.demo) {
+    el.className = 'banner';
+    el.innerHTML = `${icon('login')}<div class="banner-text"><b>Add your Facebook cookies to start</b>FlipRadar signs in to Facebook with them. Nothing is checked until they're in. It takes about a minute.</div><div class="banner-actions"><button class="btn btn-primary btn-sm" data-act="settings">${icon('login')}Add cookies</button></div>`;
+    el.hidden = false;
+    return;
+  }
   if (p && state.watches.some((w) => w.enabled)) {
     const titles = {
-      LOGIN_REQUIRED: 'Facebook wants a login on this computer',
+      LOGIN_REQUIRED: "Facebook didn't accept your cookies",
       CHECKPOINT: 'Facebook wants a security check',
       RATE_LIMITED: 'Facebook asked us to slow down',
-      NO_BROWSER: 'Browser mode needs Chrome or Edge',
       INELIGIBLE: 'This account cannot use Marketplace',
+      BAD_LOCATION: 'Facebook did not recognize your area',
     };
     const actions = [];
-    if (p.code === 'LOGIN_REQUIRED' || p.code === 'CHECKPOINT') actions.push(`<button class="btn btn-primary btn-sm" data-act="connect">${icon('login')}Connect Facebook</button>`);
+    if (p.code === 'LOGIN_REQUIRED' || p.code === 'CHECKPOINT' || p.code === 'BAD_LOCATION') actions.push(`<button class="btn btn-primary btn-sm" data-act="settings">${icon('login')}Open Settings</button>`);
     actions.push(`<button class="btn btn-sm" data-act="resume">${icon('refresh')}Try again now</button>`);
-    if (p.code !== 'LOGIN_REQUIRED') actions.push(`<button class="btn btn-ghost btn-sm" data-act="settings">Settings</button>`);
     el.className = `banner ${p.code === 'RATE_LIMITED' ? '' : 'danger'}`;
     el.innerHTML = `${icon('alert')}<div class="banner-text"><b>${esc(titles[p.code] || 'Facebook checks are having trouble')}</b>${esc(p.message || '')}</div><div class="banner-actions">${actions.join('')}</div>`;
     el.hidden = false;
@@ -245,7 +256,7 @@ function watchSub(w) {
   const bits = [];
   if (w.query) bits.push(`“${w.query}”`);
   else if (w.category) bits.push(w.category);
-  bits.push(w.location || 'your area');
+  bits.push(w.location || state.settings?.area?.label || state.settings?.area?.location || 'your area');
   if (w.minPrice != null || w.maxPrice != null) {
     bits.push(w.minPrice != null && w.maxPrice != null ? `${money(w.minPrice)}–${money(w.maxPrice)}` : w.minPrice != null ? `${money(w.minPrice)}+` : `under ${money(w.maxPrice)}`);
   }
@@ -325,7 +336,7 @@ function renderSideFoot() {
     if (sp && (sp.foundAfterMin !== null || sp.checkMs !== null)) {
       const found = sp.foundAfterMin === null ? '' : sp.foundAfterMin < 1 ? 'New posts found in <b>under a minute</b>' : `New posts found <b>~${Math.round(sp.foundAfterMin)} min</b> after posting`;
       const secs = sp.checkMs === null ? '' : sp.checkMs < 1000 ? 'under 1 s' : `${(sp.checkMs / 1000).toFixed(1)} s`;
-      const check = sp.checkMs === null ? '' : `checks take <b>${secs}</b>${sp.engine === 'browser' ? ' (browser)' : ''}`;
+      const check = sp.checkMs === null ? '' : `checks take <b>${secs}</b>`;
       parts.push(`<div class="meter speed" title="Typical over the last day. To hear about posts sooner, pick a shorter &quot;Check every&quot; on a watch.">${icon('zap')}<span>${[found, check].filter(Boolean).join(' · ')}</span></div>`);
     }
   }
@@ -702,6 +713,7 @@ function connectEvents() {
     state.facebook = f;
     if (state.modal === 'settings') renderFacebookBox();
     refreshDepthNote();
+    renderBanner();
   });
   on('settings', (s) => {
     state.settings = s;
@@ -924,7 +936,7 @@ function openWatchForm(w = null) {
       </div>
       <div class="divider">or fill in</div>
       <label class="field"><span>What are you looking for?</span><input class="input" id="f-query" value="${esc(v.query)}" placeholder="e.g. road bike, PS5, sectional couch" ${w ? '' : 'autofocus'} maxlength="120"></label>
-      <label class="field"><span>Location <small>— a Facebook city name like <code>tampa</code>, <code>nyc</code>, <code>la</code>, or the number from a Marketplace link. Leave empty to use your Facebook location.</small></span><input class="input" id="f-location" value="${esc(v.location)}" placeholder="tampa" maxlength="80" autocomplete="off"></label>
+      <label class="field"><span>Location <small>— leave empty to use your area (Settings). Or a Facebook city name like <code>tampa</code>, or the number from a Marketplace link.</small></span><input class="input" id="f-location" value="${esc(v.location)}" placeholder="${esc(state.settings?.area?.label || state.settings?.area?.location || 'your area')}" maxlength="80" autocomplete="off"></label>
       <div class="row2">
         <label class="field"><span>Min price</span><div class="money-wrap"><input class="input money" id="f-min" inputmode="decimal" value="${v.minPrice ?? ''}" placeholder="0"></div></label>
         <label class="field"><span>Max price</span><div class="money-wrap"><input class="input money" id="f-max" inputmode="decimal" value="${v.maxPrice ?? ''}" placeholder="any"></div></label>
@@ -1075,17 +1087,10 @@ function hourOptions(sel) {
   return Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === sel ? 'selected' : ''}>${new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' })}</option>`).join('');
 }
 
-/** What "results to read per search" will actually do on this computer. */
+/** What "results to read per search" does. */
 function depthNote() {
-  const s = state.settings;
-  const how =
-    'Facebook shows 24 results at a time and loads more as you scroll. FlipRadar scrolls in a background browser to read more: on a search’s first check, when a burst of new listings comes in, and every 10 minutes for ones Facebook places lower.';
-  if (s.searchPages <= 1) return how;
-  if (s.engine === 'fast') return `${how} <b>Fast only mode reads just the first page.</b> Switch the Facebook connection to Auto to read more.`;
-  if (state.facebook && !state.facebook.browser?.executable) {
-    return `${how} <b>No Chrome or Chromium was found, so only the first page is read.</b> Install Google Chrome, or restart FlipRadar with its start script to download one.`;
-  }
-  return how;
+  if (state.settings.searchPages <= 1) return 'Facebook shows 24 results at a time. Only that first page is read.';
+  return 'Facebook shows 24 results at a time, with a cursor (a bookmark) for the next page. FlipRadar follows it with your cookies, page after page: to the very end on a search’s first check and every 10 minutes, and right away when a burst of new listings comes in. Routine checks stop once a page brings nothing new.';
 }
 
 function openSettings() {
@@ -1096,12 +1101,17 @@ function openSettings() {
     .join('');
   const sw = (key, on) => `<span class="switch"><input type="checkbox" data-k="${key}" ${on ? 'checked' : ''}><span></span></span>`;
   const depths = [
-    [1, 'First page only (24)'],
-    [3, 'Up to 3 pages (72)'],
+    [50, 'All of them: follow the cursor to the end (recommended)'],
+    [10, 'Up to 10 pages (240)'],
     [5, 'Up to 5 pages (120)'],
-    [10, 'As many as possible (up to 240)'],
+    [3, 'Up to 3 pages (72)'],
+    [1, 'First page only (24)'],
   ]
-    .map(([v, label]) => `<option value="${v}" ${s.searchPages === v ? 'selected' : ''}>${label}${v === 10 ? ' (recommended)' : ''}</option>`)
+    .map(([v, label]) => `<option value="${v}" ${s.searchPages === v ? 'selected' : ''}>${label}</option>`)
+    .join('');
+  const a = s.area || {};
+  const miles = [0, ...RADIUS_MI]
+    .map((m) => `<option value="${m}" ${Number(a.radiusMi || 0) === m ? 'selected' : ''}>${m ? `${m} miles` : 'Facebook’s default for your area'}</option>`)
     .join('');
   openModal(
     'settings',
@@ -1168,6 +1178,22 @@ function openSettings() {
       <section class="section" id="ai-box"></section>
 
       <section class="section" id="fb-box"></section>
+
+      <section class="section">
+        <h3>${icon('pin')}Your area</h3>
+        <p class="hint">Every search uses this, and anything that isn't local is dropped: listings that only ship, and ones from outside your state(s).</p>
+        <label class="field"><span>Paste a Marketplace link <small>(the most exact way)</small></span>
+          <div class="paste-row"><input class="input" id="area-link" placeholder="https://www.facebook.com/marketplace/…" autocomplete="off" inputmode="url"><button class="btn btn-sm" data-act="area-link">Use it</button></div>
+          <small class="hint">On Facebook: Marketplace → click your location → pick it and a distance → search for anything → copy the address bar.</small></label>
+        <div class="row2">
+          <label class="field"><span>Or type your city</span><input class="input" data-k="area.location" value="${esc(a.location || '')}" placeholder="tampa" maxlength="80" autocomplete="off"></label>
+          <label class="field"><span>Name it <small>(optional)</small></span><input class="input" data-k="area.label" value="${esc(a.label || '')}" placeholder="Tampa Bay" maxlength="60" autocomplete="off"></label>
+        </div>
+        <label class="field"><span>Distance</span><select class="input" data-k="area.radiusMi" data-num>${miles}</select></label>
+        <div class="toggle-line"><div class="txt"><b>Local pickup only</b><small>Asks Facebook for local pickup, and drops listings that only ship.</small></div>${sw('area.pickupOnly', a.pickupOnly)}</div>
+        <label class="field"><span>Only these states</span><input class="input" data-k="area.states" value="${esc((a.states || []).join(', '))}" placeholder="${a.autoStates ? 'Filled in from your first results' : 'e.g. FL'}" maxlength="80" autocomplete="off">
+          <small class="hint">Listings from other states are dropped${a.autoStates ? ' (filled in from the results in your area)' : ''}. Near a state line, list both (like <code>FL, GA</code>), or leave it empty. A watch with its own location isn't held to this.</small></label>
+      </section>
 
       <section class="section">
         <h3>${icon('zap')}Smart alert rules</h3>
@@ -1240,37 +1266,26 @@ function renderChannelStates() {
 function renderFacebookBox() {
   const box = $('#fb-box');
   if (!box || !state.settings) return;
-  const f = state.facebook || { browser: {} };
+  const f = state.facebook || {};
   const s = state.settings;
-  const b = f.browser || {};
-  const lastFast = state.watches.map((w) => w.lastStatus).find((st) => st && st.engine === 'fast' && st.ok);
+  const who = f.account?.name || (f.account?.userId ? `account ${f.account.userId}` : '');
+  const expired = state.status?.problem?.code === 'LOGIN_REQUIRED';
   let line;
-  if (b.loginActive) line = ['warn', 'refresh', 'A browser window is open. Log in to Facebook there; it closes by itself when you are done.'];
-  else if (f.connected) line = ['ok', 'check', `Connected with a Facebook account${f.connectedAt ? ` since ${new Date(f.connectedAt).toLocaleDateString()}` : ''}. Saved in FlipRadar's own browser profile.`];
-  else if (lastFast) line = ['ok', 'check', 'Fast mode is working. No Facebook login needed right now.'];
-  else line = ['warn', 'alert', 'Not connected. That is fine as long as checks work. Connect only if Facebook starts asking for a login.'];
-  const canConnect = b.installed && b.executable && b.canShowWindow;
-  const why = !b.executable ? 'Install Google Chrome or Microsoft Edge to use this.' : !b.canShowWindow ? 'No screen here (Docker or server). Use “Paste cookies” below instead.' : '';
+  if (state.demo) line = ['ok', 'check', 'Demo mode: the pretend Marketplace needs no cookies.'];
+  else if (f.signedIn && !expired) line = ['ok', 'check', who ? `Signed in as ${who}. Checks use these cookies.` : 'Cookies saved. You’ll see whose they are after the first check.'];
+  else if (f.cookiesSaved) line = ['warn', 'alert', "Facebook didn't accept these cookies (they expire, or you logged out on that browser). Paste fresh ones."];
+  else line = ['warn', 'alert', 'No cookies yet. FlipRadar signs in to Facebook with them; nothing is checked until they’re in.'];
   box.innerHTML = `
-    <h3>${icon('login')}Facebook connection</h3>
-    <div class="status-line ${line[0]}">${icon(line[1], b.loginActive ? 'spin' : '')}<span>${esc(line[2])}</span></div>
-    <label class="field"><span>How to read Marketplace</span>
-      <select class="input" data-k="engine">
-        <option value="auto" ${s.engine === 'auto' ? 'selected' : ''}>Auto (recommended): fast mode, real browser if Facebook pushes back</option>
-        <option value="fast" ${s.engine === 'fast' ? 'selected' : ''}>Fast mode only: light, no browser</option>
-        <option value="browser" ${s.engine === 'browser' ? 'selected' : ''}>Browser only: most reliable, uses more memory</option>
-      </select></label>
-    <div class="btn-row">
-      <button class="btn btn-sm ${f.connected ? '' : 'btn-primary'}" data-act="connect" ${canConnect && !b.loginActive ? '' : 'disabled'}>${icon('login')}${f.connected ? 'Reconnect' : 'Connect Facebook'}</button>
-      ${f.connected || b.hasProfile ? `<button class="btn btn-sm btn-ghost" data-act="disconnect">Disconnect</button>` : ''}
-    </div>
-    ${why ? `<p class="hint">${esc(why)}</p>` : ''}
-    <p class="hint">Honest heads-up: Facebook's rules don't allow automated checking. Logged-out fast mode doesn't use any account. If you connect one, a spare account is safest, and gentle check speeds keep the risk low.</p>
-    <details class="more"><summary>Advanced: paste cookies <span class="state ${s.cookiesSet ? 'ok' : 'off'}">${s.cookiesSet ? (s.cookiesKind === 'session' ? 'Logged-in cookies saved' : 'Saved (no login cookie)') : 'None'}</span></summary><div class="inner">
-      <p class="hint">For servers without a screen. Export your facebook.com cookies with a cookie extension (JSON or <code>name=value; …</code>) and paste them here. They're stored only on this computer.</p>
-      <textarea class="input" id="cookie-box" placeholder="c_user=…; xs=…; datr=…" spellcheck="false"></textarea>
-      <div class="btn-row"><button class="btn btn-sm" data-act="save-cookies">Save cookies</button>${s.cookiesSet ? '<button class="btn btn-sm btn-ghost" data-act="clear-cookies">Remove cookies</button>' : ''}</div>
-    </div></details>`;
+    <h3>${icon('login')}Facebook cookies</h3>
+    <div class="status-line ${line[0]}">${icon(line[1])}<span>${esc(line[2])}</span></div>
+    <ol class="howto">
+      <li>On this computer, open <b>facebook.com</b> in Firefox or Chrome, logged in. A spare account is safest.</li>
+      <li>Add the free <b>Cookie-Editor</b> extension, open it on facebook.com, click <b>Export</b> (it copies them).</li>
+      <li>Paste here and press <b>Save cookies</b>.</li>
+    </ol>
+    <textarea class="input" id="cookie-box" placeholder="Paste the export here (JSON, or c_user=…; xs=…; …)" spellcheck="false"></textarea>
+    <div class="btn-row"><button class="btn btn-sm btn-primary" data-act="save-cookies">Save cookies</button>${s.cookiesSet ? '<button class="btn btn-sm btn-ghost" data-act="clear-cookies">Remove cookies</button>' : ''}</div>
+    <p class="hint">Stored only on this computer, and kept fresh as Facebook updates them. Heads-up: Facebook's rules don't allow automated checking, so a spare account is safest, and gentle check speeds keep the risk low.</p>`;
 }
 
 async function onSettingsChange(e) {
@@ -1305,6 +1320,11 @@ async function onSettingsChange(e) {
   if (t.type === 'password' && value === SECRET) return;
   await saveSetting(key, value);
   if (key === 'notify.ntfy.topic') $('#ntfy-topic').textContent = state.settings.notify.ntfy.topic;
+  if (key === 'area.location') {
+    // A new place clears the state learned for the old one.
+    const st = modal.querySelector('[data-k="area.states"]');
+    if (st) st.value = state.settings.area.states.join(', ');
+  }
 }
 
 async function onSettingsClick(e) {
@@ -1346,15 +1366,39 @@ async function onSettingsClick(e) {
       await saveSetting('cookies', v);
       $('#cookie-box').value = '';
       renderFacebookBox();
-      toast(state.settings.cookiesKind === 'session' ? 'Cookies saved. Checks will use your login.' : 'Saved, but no login cookie (c_user/xs) was found.', state.settings.cookiesKind === 'session' ? 'ok' : 'warn');
+      const session = state.settings.cookiesKind === 'session';
+      toast(
+        !session
+          ? "Saved, but there's no login in them (c_user and xs). Export them again while logged in to facebook.com."
+          : state.watches.length
+            ? 'Cookies saved. Checking your watches now.'
+            : 'Cookies saved. Next: set your area below, then add a watch.',
+        session ? 'ok' : 'warn',
+        { ms: 7000 },
+      );
+      break;
+    }
+    case 'area-link': {
+      const v = $('#area-link').value.trim();
+      if (!v) return toast('Paste a Marketplace link first.', 'warn');
+      try {
+        state.settings = await api('/api/settings', { method: 'PUT', body: { area: { link: v } } });
+        $('#area-link').value = '';
+        // Show what the link set.
+        const show = { 'area.location': state.settings.area.location, 'area.radiusMi': String(state.settings.area.radiusMi), 'area.states': state.settings.area.states.join(', ') };
+        for (const [k, v] of Object.entries(show)) {
+          const el = modal.querySelector(`[data-k="${k}"]`);
+          if (el) el.value = v;
+        }
+        toast('Your area is set. The next checks use it.', 'ok');
+      } catch (ex) {
+        toast(ex.message, 'error', { ms: 9000 });
+      }
       break;
     }
     case 'clear-cookies':
       await saveSetting('cookies', '');
       renderFacebookBox();
-      break;
-    case 'connect':
-      connectFacebook();
       break;
     case 'ai-test':
       btn.classList.add('loading');
@@ -1367,26 +1411,7 @@ async function onSettingsClick(e) {
         btn.classList.remove('loading');
       }
       break;
-    case 'disconnect':
-      if (!confirm('Disconnect Facebook? This deletes the saved login from FlipRadar (not from Facebook).')) return;
-      try {
-        await api('/api/facebook/disconnect', { method: 'POST' });
-        toast('Disconnected.');
-      } catch (ex) {
-        toast(ex.message, 'error');
-      }
-      break;
     default:
-  }
-}
-
-async function connectFacebook() {
-  try {
-    await api('/api/facebook/connect', { method: 'POST' });
-    toast('A browser window is opening. Log in to Facebook there; it closes by itself afterwards.', 'ok', { ms: 9000 });
-  } catch (e) {
-    toast(e.message, 'error', { ms: 9000 });
-    if (state.modal !== 'settings') openSettings();
   }
 }
 
@@ -1406,8 +1431,8 @@ function renderActivityBody() {
     ${rows.length ? `<table class="log"><thead><tr><th>When</th><th>Watch</th><th>Result</th><th>Time</th></tr></thead><tbody>
       ${rows
         .map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleTimeString())}</td><td>${esc(r.watch)}${r.manual ? ' <span class="eng">(manual)</span>' : ''}</td>
-          <td class="res">${r.code === 'OK' ? `<span class="ok">${r.more ? 'More' : 'OK'}</span> ${r.found} found${r.pages > 1 ? ` on ${r.pages} pages` : ''}${r.fresh ? ` · <b>${r.fresh} new</b>` : ''}${r.alerts ? ` · ${r.alerts} alerted` : ''}${r.more && r.reason ? `<br><small>${esc(r.reason)}</small>` : ''}` : `<span class="bad">${esc(SHORT[r.code] || r.code)}</span><br><small>${esc(r.message || '')}</small>`}
-          <div class="eng">${esc(r.engine === 'fast' ? 'fast mode' : r.engine === 'browser' ? (r.fallbackFrom ? `browser, after fast mode got: ${SHORT[r.fallbackFrom] || r.fallbackFrom}` : 'browser') : r.engine || '')}</div></td>
+          <td class="res">${r.code === 'OK' ? `<span class="ok">${r.more ? 'More' : 'OK'}</span> ${r.found} found${r.pages > 1 ? ` on ${r.pages} pages${r.toEnd ? ' (to the end)' : ''}` : ''}${r.fresh ? ` · <b>${r.fresh} new</b>` : ''}${r.alerts ? ` · ${r.alerts} alerted` : ''}${r.notLocal ? ` · ${r.notLocal} not local, skipped` : ''}${r.more && r.reason ? `<br><small>${esc(r.reason)}</small>` : ''}` : `<span class="bad">${esc(SHORT[r.code] || r.code)}</span><br><small>${esc(r.message || '')}</small>`}
+          <div class="eng">${esc(r.more && r.how ? `next pages: ${r.how}` : r.engine === 'browser' ? 'background browser' : r.engine === 'cookies' ? 'with your cookies' : r.engine || '')}</div></td>
           <td class="num">${r.ms ? `${(r.ms / 1000).toFixed(1)}s` : '—'}</td></tr>`)
         .join('')}
     </tbody></table>` : '<p class="hint">No checks yet.</p>'}`;
@@ -1471,7 +1496,6 @@ function bindEvents() {
 
     if (act === 'add') return openWatchForm();
     if (act === 'settings') return openSettings();
-    if (act === 'connect') return connectFacebook();
     if (act === 'clear-filter') {
       state.view.watchId = null;
       renderGrid();

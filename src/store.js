@@ -7,12 +7,13 @@ import path from 'node:path';
 import { randomId, clamp, toNumber, log } from './util.js';
 import { DEFAULT_DEAL_RULES } from './evaluate.js';
 import { DEFAULT_AI_MODEL } from './ai.js';
+import { DEFAULT_AREA } from './area.js';
 
 export const DEFAULT_SETTINGS = {
-  engine: 'auto', // 'auto' | 'fast' | 'browser'
-  cookies: '', // optional Facebook cookies (Settings > Advanced)
+  cookies: '', // your Facebook cookies: how FlipRadar signs in (Settings > Facebook cookies)
   maxAlertAgeMin: 60, // only alert on listings posted within this many minutes
-  searchPages: 10, // read up to this many pages of results (Facebook shows 24 per page)
+  searchPages: 50, // follow Facebook's cursor for up to this many pages (24 results each); 50 = to the end
+  area: { ...DEFAULT_AREA }, // your area: every search uses it, and anything not local is dropped
   hidePlaceholderPrices: true, // hide "$1" bait listings
   quietHours: { enabled: false, start: 1, end: 6 },
   deals: { ...DEFAULT_DEAL_RULES },
@@ -189,7 +190,6 @@ export class Store {
     const d = raw && typeof raw === 'object' ? raw : {};
     const settings = deepMerge(structuredClone(DEFAULT_SETTINGS), d.settings);
     if (!settings.notify.ntfy.topic) settings.notify.ntfy.topic = `flipradar-${randomId(14)}`;
-    if (!['auto', 'fast', 'browser'].includes(settings.engine)) settings.engine = 'auto';
     return {
       version: 1,
       settings,

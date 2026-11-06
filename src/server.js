@@ -12,7 +12,8 @@ import { Monitor } from './monitor.js';
 import { AiAdvisor, AI_MODELS } from './ai.js';
 import { Notifier } from './notify.js';
 import { FacebookClient } from './facebook/client.js';
-import { buildSearchUrl, parseMarketplaceUrl } from './facebook/urls.js';
+import { buildSearchUrl, parseMarketplaceUrl, cleanLocation } from './facebook/urls.js';
+import { RADIUS_MI, stateList, nearestMiles } from './area.js';
 import { parseCookieInput, hasSession } from './facebook/cookies.js';
 import { JUNK_WORDS } from './deals.js';
 import { guideSummary } from './priceguide.js';
@@ -74,13 +75,35 @@ function maskSettings(s) {
 
 const str = (v, max = 500) => String(v ?? '').trim().slice(0, max);
 
+/** Settings > Your area. A pasted Marketplace link gives the exact place Facebook uses. */
+function applyArea(area, a) {
+  const placeBefore = area.location;
+  if (typeof a.link === 'string' && a.link.trim()) {
+    const p = parseMarketplaceUrl(a.link);
+    if (!p || p.kind === 'item') throw new HttpError(400, 'That is not a Marketplace search link. On Facebook, open Marketplace, set your location, search for anything, then copy the address bar.');
+    if (!p.location) throw new HttpError(400, 'That link has no location in it. On Marketplace, click your location, pick it and a distance, search, then copy the address bar.');
+    area.location = p.location;
+    if (p.radius > 0) area.radiusMi = nearestMiles(p.radius); // the distance you picked on Facebook
+  }
+  if (typeof a.location === 'string') area.location = cleanLocation(a.location);
+  if (typeof a.label === 'string') area.label = str(a.label, 60);
+  if ('radiusMi' in a) area.radiusMi = RADIUS_MI.includes(Number(a.radiusMi)) ? Number(a.radiusMi) : 0;
+  if ('pickupOnly' in a) area.pickupOnly = Boolean(a.pickupOnly);
+  if ('states' in a) {
+    area.states = stateList(a.states);
+    area.autoStates = false; // your choice from now on
+  } else if (area.autoStates && area.location !== placeBefore) {
+    area.states = []; // a new place: learn its state again from the first results there
+  }
+}
+
 function applySettings(cur, patch) {
   if (!patch || typeof patch !== 'object') return;
-  if (['auto', 'fast', 'browser'].includes(patch.engine)) cur.engine = patch.engine;
   if (typeof patch.cookies === 'string') cur.cookies = patch.cookies.trim().slice(0, 20000);
   if ('maxAlertAgeMin' in patch) cur.maxAlertAgeMin = clamp(Math.round(toNumber(patch.maxAlertAgeMin) || 60), 5, 1440);
   if ('hidePlaceholderPrices' in patch) cur.hidePlaceholderPrices = Boolean(patch.hidePlaceholderPrices);
-  if ('searchPages' in patch && [1, 3, 5, 10].includes(Number(patch.searchPages))) cur.searchPages = Number(patch.searchPages);
+  if ('searchPages' in patch && [1, 3, 5, 10, 50].includes(Number(patch.searchPages))) cur.searchPages = Number(patch.searchPages);
+  if (patch.area && typeof patch.area === 'object') applyArea(cur.area, patch.area);
   if (patch.deals && typeof patch.deals === 'object') {
     const d = patch.deals;
     const num = (v, lo, hi, dflt) => clamp(toNumber(v) ?? dflt, lo, hi);
@@ -127,6 +150,8 @@ function applySettings(cur, patch) {
 
 export async function createApp(overrides = {}) {
   const config = { ...defaultConfig, ...overrides };
+  // FlipRadar signs in to Facebook with your cookies; the demo's pretend Marketplace doesn't need them.
+  config.requireCookies ??= !config.demo;
   fs.mkdirSync(config.dataDir, { recursive: true });
   const store = new Store(path.join(config.dataDir, 'db.json'));
   const hub = new Hub();
@@ -144,10 +169,11 @@ export async function createApp(overrides = {}) {
   // restart cut short: keep them now.
   for (const l of Object.values(store.listings)) monitor.keepIfDeal(l);
 
-  const publicWatch = (w) => ({ ...w, searchUrl: buildSearchUrl(w, config.fbBase) });
+  const publicWatch = (w) => ({ ...w, searchUrl: buildSearchUrl(w, config.fbBase, store.settings.area) });
 
   monitor.on('listings', (items) => hub.send('listings', items));
   monitor.on('dealsLogged', (n) => hub.send('dealsLogged', n));
+  monitor.on('settings', () => hub.send('settings', maskSettings(store.settings)));
   monitor.on('updates', (items) => hub.send('updates', items));
   monitor.on('alert', (items) => hub.send('alert', items));
   monitor.on('watch', (w) => hub.send('watch', publicWatch(w)));
@@ -162,7 +188,17 @@ export async function createApp(overrides = {}) {
     }
   });
 
-  const pushFacebook = async () => hub.send('facebook', await fb.status());
+  // Sign-in status, sent when it changes: cookies pasted, whose they turn out
+  // to be after a check, or Facebook no longer accepting them.
+  let lastFacebook = '';
+  const pushFacebook = async () => {
+    const f = await fb.status();
+    const key = JSON.stringify(f);
+    if (key === lastFacebook) return;
+    lastFacebook = key;
+    hub.send('facebook', f);
+  };
+  monitor.on('log', () => pushFacebook().catch(() => {}));
 
   // -------------------------------------------------------------------------
   // API
@@ -289,15 +325,23 @@ export async function createApp(overrides = {}) {
   });
 
   add('PUT', '/api/settings', async ({ body }) => {
-    const before = store.settings.engine;
-    const depthBefore = [store.settings.engine, store.settings.searchPages].join();
+    const cookiesBefore = store.settings.cookies;
+    const depthBefore = JSON.stringify([store.settings.searchPages, store.settings.area]);
     const rulesBefore = JSON.stringify([store.settings.deals, store.settings.hidePlaceholderPrices]);
     applySettings(store.settings, body);
-    // A new connection mode or depth applies at the next check, not after a pause.
-    if ([store.settings.engine, store.settings.searchPages].join() !== depthBefore) {
+    if (store.settings.cookies !== cookiesBefore) {
+      // New cookies: sign in with them and check everything right away.
+      fb.useCookies();
+      monitor.problem = null;
+      monitor.clearCooldown();
       monitor.retryMore();
-      for (const w of store.watches) hub.send('watch', publicWatch(w));
+      for (const w of store.watches) if (w.enabled) w.nextScanAt = Math.min(w.nextScanAt || 0, Date.now());
+    } else if (JSON.stringify([store.settings.searchPages, store.settings.area]) !== depthBefore) {
+      // A new depth or area applies at the next check, not after a pause.
+      monitor.retryMore();
+      if (monitor.applyArea()) hub.send('reload', { reason: 'area' });
     }
+    for (const w of store.watches) hub.send('watch', publicWatch(w));
     store.save();
     if (JSON.stringify([store.settings.deals, store.settings.hidePlaceholderPrices]) !== rulesBefore) {
       // New deal rules: re-sort everything already found.
@@ -305,7 +349,6 @@ export async function createApp(overrides = {}) {
       hub.send('reload', { reason: 'rules' });
     }
     if (body.ai) hub.send('ai', aiInfo());
-    if (before !== store.settings.engine) fb.httpPausedUntil = 0;
     const masked = maskSettings(store.settings);
     hub.send('settings', masked);
     pushFacebook();
@@ -342,41 +385,6 @@ export async function createApp(overrides = {}) {
       throw new HttpError(400, 'That link is a single listing. Search for something on Marketplace first, then copy that page\'s link.');
     }
     return p;
-  });
-
-  add('POST', '/api/facebook/connect', async () => {
-    const st = await fb.browser.status();
-    if (!st.installed || !st.executable) throw new HttpError(400, 'No browser found. Install Google Chrome (or Edge), then try again.');
-    if (!st.canShowWindow) throw new HttpError(400, 'This computer has no screen for a login window. Use Advanced > Paste cookies instead.');
-    if (st.loginActive) return { started: true };
-    fb.browser
-      .connect()
-      .then((r) => {
-        if (r.ok) {
-          Object.assign(store.data.facebook, { connected: true, connectedAt: Date.now() });
-          monitor.retryMore();
-          store.save();
-          monitor.problem = null;
-          monitor.clearCooldown();
-          fb.httpPausedUntil = 0;
-          for (const w of store.watches) if (w.enabled) w.nextScanAt = Math.min(w.nextScanAt || 0, Date.now());
-          hub.send('toast', { kind: 'ok', text: 'Facebook connected. Checking your watches now.' });
-        } else {
-          hub.send('toast', { kind: 'warn', text: r.cancelled ? 'Login window closed before logging in.' : 'Login timed out.' });
-        }
-      })
-      .catch((e) => hub.send('toast', { kind: 'error', text: e.message }))
-      .finally(pushFacebook);
-    setTimeout(pushFacebook, 300);
-    return { started: true };
-  });
-
-  add('POST', '/api/facebook/disconnect', async () => {
-    await fb.browser.disconnect();
-    Object.assign(store.data.facebook, { connected: false, connectedAt: null });
-    store.save();
-    await pushFacebook();
-    return { ok: true };
   });
 
   add('POST', '/api/resume', async () => {

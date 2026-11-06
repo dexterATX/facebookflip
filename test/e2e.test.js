@@ -7,7 +7,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { MockFacebook } from '../tools/mock-facebook.js';
 import { createApp } from '../src/server.js';
-import { findBrowser } from '../src/facebook/browser.js';
 import { RULES_VERSION } from '../src/evaluate.js';
 
 function fakeNtfy() {
@@ -72,19 +71,19 @@ async function waitUntil(fn, ms = 10000) {
   }
 }
 
-async function boot(t, { engine = 'fast', browserPath = '', seedCount = 10 } = {}) {
+async function boot(t, { seedCount = 10 } = {}) {
   const mock = new MockFacebook({ autoAdd: false, seedCount });
   const fbBase = await mock.listen(0);
   const ntfy = await fakeNtfy();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flipradar-e2e-'));
-  const app = await createApp({ fbBase, dataDir, scanGapMs: 50, requestGapMs: 20, host: '127.0.0.1', demo: false, browserPath });
+  const app = await createApp({ fbBase, dataDir, scanGapMs: 50, requestGapMs: 20, pageGapMs: 20, host: '127.0.0.1', demo: false, requireCookies: false });
   const addr = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${addr.port}`;
   const api = async (p, { method = 'GET', body, headers = {} } = {}) => {
     const r = await fetch(base + p, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, body: await r.json().catch(() => null), headers: r.headers };
   };
-  await api('/api/settings', { method: 'PUT', body: { engine, notify: { ntfy: { enabled: true, server: ntfy.url } } } });
+  await api('/api/settings', { method: 'PUT', body: { notify: { ntfy: { enabled: true, server: ntfy.url } } } });
   const events = sse(`${base}/api/events`);
   t.after(async () => {
     events.close();
@@ -211,15 +210,17 @@ test('API: validation, secrets stay masked, cross-site and foreign-host requests
   await api('/api/settings', { method: 'PUT', body: { notify: { discord: { webhookUrl: '••••••••' } } } });
   assert.equal(app.store.settings.notify.discord.webhookUrl, 'https://discord.com/api/webhooks/1/abc');
 
-  const cross = await api('/api/settings', { method: 'PUT', body: { engine: 'browser' }, headers: { origin: 'https://evil.example' } });
+  const cross = await api('/api/settings', { method: 'PUT', body: { searchPages: 1 }, headers: { origin: 'https://evil.example' } });
   assert.equal(cross.status, 403);
+  assert.equal(app.store.settings.searchPages, 50, 'a blocked request changes nothing');
   for (const site of ['cross-site', 'same-site']) {
-    const r = await api('/api/settings', { method: 'PUT', body: { engine: 'browser' }, headers: { 'sec-fetch-site': site } });
+    const r = await api('/api/settings', { method: 'PUT', body: { searchPages: 1 }, headers: { 'sec-fetch-site': site } });
     assert.equal(r.status, 403, site);
   }
   // Behind a preview/reverse proxy the Origin no longer matches Host, but the browser still says same-origin.
-  const proxied = await api('/api/settings', { method: 'PUT', body: { engine: 'fast' }, headers: { 'sec-fetch-site': 'same-origin', origin: 'https://preview.example' } });
+  const proxied = await api('/api/settings', { method: 'PUT', body: { searchPages: 3 }, headers: { 'sec-fetch-site': 'same-origin', origin: 'https://preview.example' } });
   assert.equal(proxied.status, 200);
+  assert.equal(app.store.settings.searchPages, 3);
 
   const foreignHost = await new Promise((resolve) => {
     const u = new URL(base);
@@ -231,34 +232,6 @@ test('API: validation, secrets stay masked, cross-site and foreign-host requests
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
   assert.equal((await fetch(`${base}/..%2fpackage.json`)).status, 404);
-});
-
-const browserPath = process.env.BROWSER_PATH || (await findBrowser());
-test('browser mode reads the same listings through a real headless browser', { skip: !browserPath && 'no Chrome/Chromium found' }, async (t) => {
-  const { mock, api } = await boot(t, { engine: 'browser', browserPath: process.env.BROWSER_PATH || '' });
-  const created = (await api('/api/watches', { method: 'POST', body: { query: 'couch', location: 'tampa' } })).body;
-  const done = await waitUntil(async () => (await api('/api/state')).body.watches[0].lastStatus, 60000);
-  assert.equal(done.code, 'OK', done.message);
-  assert.equal(done.engine, 'browser');
-  const state = (await api('/api/state')).body;
-  assert.equal(state.listings.length, 10);
-  const ua = mock.requests.find((r) => r.path.startsWith('/marketplace/')).headers['user-agent'];
-  assert.doesNotMatch(ua, /Headless/);
-  assert.ok(created.id);
-});
-
-test('auto mode: when fast mode gets an empty page, the real browser takes over and reads the GraphQL data', { skip: !browserPath && 'no Chrome/Chromium found' }, async (t) => {
-  const { mock, api, app } = await boot(t, { engine: 'auto', browserPath: process.env.BROWSER_PATH || '' });
-  mock.mode = 'needs-js';
-  await api('/api/watches', { method: 'POST', body: { query: 'ps5', location: 'tampa' } });
-  const done = await waitUntil(async () => (await api('/api/state')).body.watches[0].lastStatus, 60000);
-  assert.equal(done.code, 'OK', done.message);
-  assert.equal(done.engine, 'browser');
-  const { listings } = (await api('/api/state')).body;
-  assert.equal(listings.length, 10);
-  assert.ok(listings.every((l) => l.creationTime && l.photo), 'came from the GraphQL data, not just the visible cards');
-  assert.ok(app.fb.httpPausedUntil > Date.now(), 'fast mode rests for a while');
-  assert.ok(mock.requests.some((r) => r.path === '/api/graphql/'));
 });
 
 test('listings saved by an older version are re-judged once with the current rules', async (t) => {

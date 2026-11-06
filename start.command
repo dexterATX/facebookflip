@@ -18,7 +18,4 @@ if [ ! -d node_modules ] || [ package.json -nt node_modules/.package-lock.json ]
   npm install --no-fund --no-audit || { echo "Installing failed. Check your internet connection."; read -r -p "Press Enter to close."; exit 1; }
 fi
 
-# Reading past the first 24 results needs a browser: use an installed one, or get Chromium once.
-node tools/ensure-browser.js
-
 OPEN=1 node src/server.js

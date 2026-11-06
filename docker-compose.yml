@@ -13,4 +13,4 @@ services:
       # - PASSWORD=pick-a-password
     volumes:
       - ./data:/data
-    shm_size: "1gb" # Chrome needs shared memory in browser mode
+    shm_size: "1gb" # Chrome needs shared memory (background-browser fallback)

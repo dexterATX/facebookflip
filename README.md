@@ -12,7 +12,9 @@ FlipRadar watches the Marketplace searches you care about, newest first. Every n
 ## What it does
 
 - **Fast.** Each search is checked every 3 minutes by default (you can pick 1 to 60). New listings reach your phone a few seconds after the check that finds them.
-- **Reads past the first 24.** Facebook shows 24 results at a time and loads more as you scroll. FlipRadar scrolls too, so it sees up to 240 results per search. See [Reading more than 24 results](#reading-more-than-24-results).
+- **Every result, not just the first 24.** Facebook shows 24 results at a time, with a cursor (a bookmark) for the next page. FlipRadar follows that cursor with your cookies to the end of the results. See [Reading every page](#reading-every-page).
+- **Your area only.** One place and distance for every search. It asks Facebook for local pickup only, and drops anything that still isn't local: listings that only ship, and ones from outside your state. See [Your area](#your-area).
+- **Signs in with your cookies.** You paste your Facebook cookies once; FlipRadar keeps them fresh. No passwords, no login windows, no extra browser.
 - **Phone alerts.** Free [ntfy](https://ntfy.sh) app (no sign-up), Discord or Telegram. Each alert shows the price, title, photo and how long ago it was posted, and opens the listing when tapped.
 - **Smart filters.**
   - Skips listings with words you don't want ("broken", "for parts", "ISO"…), with one click to add common junk words.
@@ -53,8 +55,10 @@ You need a computer that stays on while you want alerts. Your everyday Windows o
    - **Anything else:** run `npm install` once, then `npm start`.
 
    Your browser opens http://localhost:3000. Keep the black terminal window open; closing it stops FlipRadar.
-4. **Add a watch.** Click **New watch**. The easiest way: on Facebook, search Marketplace with your location and filters, copy the address bar, and paste it in. Or just type what you want, your city, and a price range.
-5. **Turn on phone alerts.** Click the settings icon (top right) and follow the three ntfy steps, then tap **Send test**.
+4. **Paste your Facebook cookies.** Click **Add cookies** in the yellow banner (or the settings icon, top right) and follow the three steps. See [Facebook cookies](#facebook-cookies).
+5. **Set your area.** Settings → **Your area**: paste a Marketplace link with your location and distance set, or type your city.
+6. **Add a watch.** Click **New watch** and type what you want and a price range. It searches your area.
+7. **Turn on phone alerts.** Settings → follow the three ntfy steps, then tap **Send test**.
 
 That's it. New listings appear on the dashboard and on your phone.
 
@@ -127,32 +131,45 @@ How quickly you hear about a listing depends on three things:
 
 So expect most alerts within about **1–5 minutes** of a listing appearing. A 1–2 minute interval gets you there sooner, at a higher chance of Facebook slowing you down. The meter under your watches shows your total checks per hour: **Gentle** (≤60), **Moderate** (≤120) or **Heavy**.
 
-## Reading more than 24 results
+## Reading every page
 
-Facebook puts the first 24 results in the search page and loads the next 24 each time you scroll near the bottom. Its "newest first" order isn't strict either: a brand-new listing sometimes lands on page 2 or 3. So FlipRadar scrolls the search in a background browser, like a person would, and adds everything it finds.
+Facebook puts the first 24 results in the search page, along with a cursor: a bookmark for where they end. When you scroll, Facebook's own page code sends that cursor back and gets the next 24 and a new cursor, until there are no more. FlipRadar does exactly that, with plain web requests and your cookies, so it's light and quick: about a second or two per page, with a short pause between pages like someone scrolling.
 
-To stay quick and gentle, every check reads page 1 first and sends its alerts right away. It goes deeper when that pays off:
+Every check reads page 1 first and sends its alerts right away. Then it follows the cursor:
 
-- **The first check of a search, and "Check now":** every page, up to your limit.
-- **A burst:** when most of page 1 is new, more new ones are almost certainly below, so it reads on right away.
-- **Every 10 minutes:** a deeper look for listings Facebook placed lower.
+- **To the very end:** on a search's first check, when you press "Check now", and every 10 minutes, to catch listings Facebook placed lower (its "newest first" order isn't strict).
+- **Right away on a burst:** when most of page 1 is new, more new ones are almost certainly on the next pages.
+- **Routine checks** stop as soon as a page brings nothing new, to stay gentle.
 
-It stops early once a page brings nothing new, and immediately when Facebook says there are no more results. A search with fewer than 24 results never needs the browser.
+A search whose results all fit on page 1 never asks for more. The limit is in Settings → Smart alert rules → **Results to read per search** (default: all of them).
 
-- **The limit** is in Settings → Smart alert rules → **Results to read per search**: first page only (24), up to 3, 5, or 10 pages (240, the default).
-- **It needs Chrome, Edge, Chromium or Brave.** If none is installed, the start script downloads Chromium once (about 170 MB). Without a browser, or in **Fast only** mode, FlipRadar reads the first page and the watch says "first page only".
-- **The Activity log** (pulse icon) shows each deeper read: how many pages, how many new, and why it ran.
+**How it asks for the next page.** The request needs the id of Facebook's "next page" query, which changes when Facebook updates its site. FlipRadar uses the one that worked last time; if that stops working, the id of the query the search page itself ran; and if that doesn't take a cursor, it finds the id in Facebook's own script files. The **Activity** log shows which one it used. If none work (Facebook changed something bigger) and Chrome or Chromium is installed, it scrolls the search in a hidden browser with the same cookies instead. If that isn't possible either, it reads page 1, and the watch says "first page only".
 
-## Facebook access, honestly
+## Your area
 
-Facebook has **no public Marketplace API** (official way for apps to request data). FlipRadar reads the same search page your browser does. That means:
+Settings → **Your area** sets one place and distance for every search.
 
-- **Fast mode (default) needs no login.** It loads the public search page like a logged-out visitor. It works best from a home internet connection.
-- **If Facebook starts asking for a login,** you'll see a yellow banner. Click **Connect Facebook**. A browser window opens; log in once and it closes by itself. The login is saved only on your computer, in `data/browser-profile`. From then on, FlipRadar uses a real background browser when fast mode is blocked (**Auto** mode).
-- **Use a spare Facebook account if you can.** Facebook's terms don't allow automated collection. The realistic risk is that Facebook limits or locks the account you connect. Logged-out fast mode doesn't involve an account. Gentle check speeds keep the risk low.
-- **Facebook changes its website often.** If something breaks, the watch shows a warning, and the **Activity** log (pulse icon, top right) says exactly what happened. FlipRadar doesn't depend on one fixed page layout: it searches the page data for anything shaped like a listing. That makes it more resistant to Facebook's changes than most scrapers.
+- **Place:** paste a Marketplace link (the most exact way: on Facebook, open Marketplace, click your location, pick it and a distance, search for anything, and copy the address bar; FlipRadar takes the place and the distance from it), or type your city.
+- **Distance:** Facebook's default for your place, or 1 to 500 miles.
+- **Local pickup only** (on by default): asks Facebook for local pickup, and drops listings that only ship.
+- **Only these states:** listings from other states are dropped. FlipRadar fills this in from the first results in your area when nearly all of them are in one state, and again if you move your area somewhere else. Near a state line, list both (like `FL, GA`) or leave it empty; what you type stays.
 
-**Servers and Docker:** these have no screen for the login window. Use **Settings → Facebook connection → Advanced: paste cookies** instead. Export your facebook.com cookies with a cookie-export browser extension and paste them there.
+A watch can still name a city of its own. It searches there, still local pickup only, and isn't held to your state(s).
+
+Dropped listings never show up, never alert and don't count as price comparisons. The Activity log counts them ("12 not local, skipped"). Changing your area hides stored listings that no longer fit; anything you starred yourself stays.
+
+## Facebook cookies
+
+FlipRadar signs in to Facebook with your cookies (small files your browser keeps that say you're logged in). Nothing touches Facebook until they're in.
+
+1. On this computer, open **facebook.com** in Firefox or Chrome, logged in. A spare account is safest.
+2. Add the free **Cookie-Editor** extension, open it while on facebook.com, and click **Export**. That copies the cookies.
+3. In FlipRadar, Settings → **Facebook cookies**: paste them and press **Save cookies**. It checks your watches right away and shows whose account it's using.
+
+- **They stay only on this computer**, in `data/db.json`. FlipRadar keeps them fresh as Facebook updates them, like a browser does.
+- **When they stop working** (they expire, or you log out of Facebook in that browser), FlipRadar says so in a banner and waits for fresh ones instead of retrying.
+- **Honest heads-up:** Facebook's terms don't allow automated checking. The realistic risk is that Facebook limits or locks the account. A spare account and gentle check speeds keep that risk low.
+- **Facebook changes its website often.** If something breaks, the watch shows a warning and the **Activity** log (pulse icon, top right) says what happened. FlipRadar doesn't depend on one fixed page layout: it searches the page data for anything shaped like a listing.
 
 ## Phone alerts
 
@@ -182,25 +199,27 @@ While the dashboard is open, it also plays a sound and can show desktop notifica
 | `PORT` | `3000` | Dashboard port. |
 | `HOST` | `127.0.0.1` | Use `0.0.0.0` to allow other devices on your network (set `PASSWORD` too). |
 | `PASSWORD` | none | Password-protect the dashboard. |
-| `DATA_DIR` | `./data` | Where settings, listings, your deals spreadsheet (`deals.csv`) and the browser login are stored. |
-| `BROWSER_PATH` | auto | Full path to Chrome/Edge/Chromium if it isn't found automatically. |
-| `FB_USER_AGENT` | recent Chrome | Browser identity string used in fast mode. |
+| `DATA_DIR` | `./data` | Where settings, your cookies, listings, your deals spreadsheet (`deals.csv`) and the background browser's cache are stored. |
+| `BROWSER_PATH` | auto | Chrome/Edge/Chromium for the optional backup way of reading more pages. |
+| `FB_USER_AGENT` | recent Chrome | The browser identity FlipRadar's requests use. |
 
 ## Troubleshooting
 
-- **"Facebook wants a login"**: click **Connect Facebook** in the banner (or paste cookies on a server).
-- **"Location not recognized"**: edit the watch and paste a Marketplace search link instead of typing the city.
-- **"Empty page from Facebook"**: this happens now and then. FlipRadar retries automatically. If it keeps happening, switch Settings → Facebook connection to **Auto** or **Browser only**.
-- **"No browser found" or "first page only"**: install Google Chrome, or run `npm run setup-browser` to download Chromium. In Settings, the Facebook connection should be **Auto** or **Browser only**, not Fast only.
+- **"Location not recognized"**: in Settings → Your area, paste a Marketplace link instead of typing the city.
+- **"Empty page from Facebook"**: this happens now and then. FlipRadar retries automatically. If it keeps happening, paste fresh cookies.
+- **"Add your Facebook cookies" / "didn't accept your cookies"**: export fresh ones from facebook.com and paste them in Settings → Facebook cookies.
+- **"First page only"** on a watch: FlipRadar couldn't follow Facebook's cursor that time (the Activity log says why) and tries again in 30 minutes. Installing Google Chrome, or running `npm run setup-browser`, gives it a backup way.
 - **"Port 3000 is already in use"**: FlipRadar is probably already running. Otherwise start it with `PORT=3001`.
 - **No phone alerts**: open Settings and tap **Send test**. Any error shows next to the channel name.
 
 ## How it works (for the curious)
 
 - **Search:** every watch becomes a Marketplace search link forced to *Date listed: newest first* and *last 24 hours*, so new posts are always on page one.
-- **Reading listings:** Facebook embeds the first page of results (24) as JSON (structured data) inside the page, and loads the rest with its own data requests as you scroll. Instead of trusting one fixed path through that data, FlipRadar walks all of it and keeps every object shaped like a listing: one with an `id` and a `marketplace_listing_title`. It skips sponsored stories. In browser mode, it also reads Facebook's own data responses, and as a last resort the visible listing cards. See `src/facebook/extract.js`.
-- **More pages:** `scrollMore` in `src/facebook/browser.js` scrolls and waits for each next batch; `morePlan` and `readMore` in `src/monitor.js` decide when it's worth it and add what turns up.
-- **Fast mode** sends the same headers Chrome sends when opening a page, and keeps Facebook's guest cookie like a returning visitor (`src/facebook/http.js`). **Browser mode** drives your installed Chrome or Edge with its own profile (`src/facebook/browser.js`).
+- **Reading listings:** Facebook embeds the first page of results (24) as JSON (structured data) inside the page, and loads the rest with its own data requests as you scroll. Instead of trusting one fixed path through that data, FlipRadar walks all of it and keeps every object shaped like a listing: one with an `id` and a `marketplace_listing_title`. It skips sponsored stories. When it falls back to scrolling in the background browser, it reads Facebook's data responses there too, and as a last resort the visible listing cards. See `src/facebook/extract.js`.
+- **When to read more pages:** `morePlan` and `readMore` in `src/monitor.js` decide when following the cursor is worth it, and add what turns up.
+- **Requests** send the same headers Chrome sends, with your cookies, and keep the cookies Facebook updates (`src/facebook/http.js`, `src/facebook/client.js`).
+- **Following the cursor:** `src/facebook/paging.js` reads the session tokens, the page's own query and the cursor from page 1, builds the same next-page request Facebook's page code sends to `/api/graphql/`, and reads each answer. The backup way, scrolling in a hidden browser with the same cookies, is `src/facebook/browser.js`.
+- **Your area:** `src/area.js` decides what's local; the search links ask Facebook for local pickup (`src/facebook/urls.js`).
 - **New vs. old:** the first check of a watch is a quiet baseline. After that, a listing alerts if FlipRadar hasn't seen it before *and* it was posted within your alert window, 60 minutes by default (`src/monitor.js`).
 - **Deals:** red flags, resale estimate, profit math and the verdict live in `src/evaluate.js`. The price guide matcher is `src/priceguide.js`. The closer look (full listing, then AI) runs in `src/monitor.js`, and the optional AI is in `src/ai.js`.
 
@@ -215,13 +234,14 @@ src/
   deals.js           your filters and text helpers
   notify.js          ntfy, Discord, Telegram
   store.js           saves everything to data/db.json; deals also go to data/deals.csv
-  facebook/          links, page reading, fast mode, browser mode
+  area.js            your area: what counts as local
+  facebook/          links, page reading, cookies, following the cursor
 public/              the dashboard (plain HTML, CSS and JavaScript)
 tools/               pretend Marketplace, demo, accuracy report
 test/                automated tests; fixtures/ holds the labeled test set
 ```
 
-Run the tests with `npm test`. They include a full run against the pretend Marketplace, the labeled accuracy set, and, when Chrome or Chromium is installed, the real browser mode. `npm run accuracy` prints the accuracy report.
+Run the tests with `npm test`. They include a full run against the pretend Marketplace, the labeled accuracy set, and, when Chrome or Chromium is installed, the background-browser fallback. `npm run accuracy` prints the accuracy report.
 
 ---
 

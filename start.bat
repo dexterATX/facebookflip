@@ -10,9 +10,6 @@ rem Quick when nothing changed; picks up new libraries after an update.
 call npm install --no-fund --no-audit --prefer-offline --loglevel=error
 if errorlevel 1 goto :installfailed
 
-rem Reading past the first 24 results needs a browser: use an installed one, or get Chromium once.
-node tools\ensure-browser.js
-
 set OPEN=1
 node src\server.js
 pause

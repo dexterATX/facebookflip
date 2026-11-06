@@ -4,6 +4,7 @@
 // "listed in the last 24 hours" so the newest posts are always on page one.
 
 import { toNumber } from '../util.js';
+import { milesToKm } from '../area.js';
 
 export const SORT_NEWEST = 'creation_time_descend';
 const MANAGED = new Set(['query', 'minPrice', 'maxPrice', 'radius', 'sortBy', 'daysSinceListed', 'exact']);
@@ -16,21 +17,28 @@ export function cleanLocation(input) {
   return s.toLowerCase().replace(/[^a-z0-9-]+/g, '');
 }
 
-export function buildSearchUrl(watch, base = 'https://www.facebook.com') {
+/**
+ * The Marketplace search link for a watch. `area` (Settings > Your area) fills
+ * in the place and distance when the watch doesn't set its own, and asks
+ * Facebook for local pickup only.
+ */
+export function buildSearchUrl(watch, base = 'https://www.facebook.com', area = null) {
   const params = new URLSearchParams();
   const query = String(watch.query || '').trim();
   if (query) params.set('query', query);
   if (watch.minPrice != null) params.set('minPrice', String(Math.max(0, Math.floor(watch.minPrice))));
   if (watch.maxPrice != null) params.set('maxPrice', String(Math.max(0, Math.ceil(watch.maxPrice))));
-  if (watch.radius != null) params.set('radius', String(watch.radius));
+  const radius = watch.radius ?? (area?.radiusMi > 0 ? milesToKm(area.radiusMi) : null);
+  if (radius != null) params.set('radius', String(radius));
   for (const [k, v] of Object.entries(watch.extraParams || {})) {
     if (!MANAGED.has(k) && typeof v === 'string' && v) params.set(k, v);
   }
+  if (area?.pickupOnly && !params.has('deliveryMethod')) params.set('deliveryMethod', 'local_pick_up');
   params.set('daysSinceListed', '1');
   params.set('sortBy', SORT_NEWEST);
   params.set('exact', 'false');
 
-  const loc = cleanLocation(watch.location);
+  const loc = cleanLocation(watch.location || area?.location);
   const category = String(watch.category || '').replace(/[^a-z0-9_-]/gi, '');
   let path;
   if (!query && category) path = loc ? `/marketplace/${loc}/${category}/` : `/marketplace/category/${category}/`;

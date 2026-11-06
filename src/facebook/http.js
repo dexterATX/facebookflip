@@ -37,11 +37,12 @@ export function browserHeaders(userAgent) {
   };
 }
 
-function requestOnce(url, headers, timeoutMs) {
+function requestOnce(url, headers, timeoutMs, { method = 'GET', body = null } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const lib = u.protocol === 'http:' ? http : https;
-    const req = lib.request(u, { method: 'GET', headers, timeout: timeoutMs }, (res) => {
+    if (body != null) headers = { ...headers, 'content-length': Buffer.byteLength(body) };
+    const req = lib.request(u, { method, headers, timeout: timeoutMs }, (res) => {
       const enc = String(res.headers['content-encoding'] || '').toLowerCase();
       let stream = res;
       if (enc === 'gzip' || enc === 'x-gzip') stream = res.pipe(zlib.createGunzip());
@@ -59,7 +60,7 @@ function requestOnce(url, headers, timeoutMs) {
     });
     req.on('timeout', () => req.destroy(new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s`)));
     req.on('error', reject);
-    req.end();
+    req.end(body ?? undefined);
   });
 }
 
@@ -84,4 +85,42 @@ export async function fetchPage(url, { userAgent, jar, extraCookies = [], timeou
     return { status: res.status, finalUrl: current, html: res.body, ms: Date.now() - t0 };
   }
   throw new Error('Too many redirects');
+}
+
+/**
+ * POST a form to Facebook the way its own page code does (an in-page request,
+ * not a page load), e.g. the "next page of results" query to /api/graphql/.
+ */
+export async function postForm(url, form, { userAgent, jar, referer, headers: extra = {}, timeoutMs = 25000 } = {}) {
+  const t0 = Date.now();
+  const base = browserHeaders(userAgent);
+  const headers = {
+    'sec-ch-ua': base['sec-ch-ua'],
+    'sec-ch-ua-mobile': base['sec-ch-ua-mobile'],
+    'sec-ch-ua-platform': base['sec-ch-ua-platform'],
+    'user-agent': base['user-agent'],
+    accept: '*/*',
+    'content-type': 'application/x-www-form-urlencoded',
+    origin: new URL(url).origin,
+    'sec-fetch-site': 'same-origin',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-dest': 'empty',
+    'accept-encoding': base['accept-encoding'],
+    'accept-language': base['accept-language'],
+    ...(referer ? { referer } : {}),
+    ...extra,
+  };
+  const cookie = jar ? jar.header() : '';
+  if (cookie) headers.cookie = cookie;
+  const res = await requestOnce(url, headers, timeoutMs, { method: 'POST', body: String(form) });
+  if (jar) jar.absorb(res.headers['set-cookie']);
+  return { status: res.status, text: res.body, ms: Date.now() - t0 };
+}
+
+/** GET a script file (Facebook's code, on its static file servers). No cookies needed. */
+export async function fetchText(url, { userAgent, timeoutMs = 20000 } = {}) {
+  const base = browserHeaders(userAgent);
+  const headers = { 'user-agent': base['user-agent'], accept: '*/*', 'accept-encoding': base['accept-encoding'], 'sec-fetch-dest': 'script', 'sec-fetch-mode': 'no-cors', 'sec-fetch-site': 'cross-site' };
+  const res = await requestOnce(url, headers, timeoutMs);
+  return res.status === 200 ? res.body : '';
 }

@@ -21,6 +21,7 @@ import { buildSearchUrl } from './facebook/urls.js';
 import { filterReason } from './deals.js';
 import { evaluate, isCandidate, similarComps, findFlags } from './evaluate.js';
 import { median } from './util.js';
+import { notLocal, homeState } from './area.js';
 import { jitter, clamp, log } from './util.js';
 
 const GAP_MS = 6000; // default pause between two Facebook checks
@@ -93,7 +94,9 @@ export class Monitor extends EventEmitter {
     const now = Date.now();
     const enabled = this.store.watches.filter((w) => w.enabled);
     let state = 'running';
-    if (!enabled.length) state = 'idle';
+    // Cookies come first: nothing can be checked without them.
+    if (this.fb.ready && !this.fb.ready()) state = 'needs-cookies';
+    else if (!enabled.length) state = 'idle';
     else if (now < this.cooldownUntil) state = 'cooldown';
     else if (inQuietHours(this.store.settings.quietHours)) state = 'quiet';
     const next = enabled.reduce((m, w) => Math.min(m, w.nextScanAt || now), Infinity);
@@ -148,6 +151,8 @@ export class Monitor extends EventEmitter {
   }
 
   pickNext(now) {
+    // Nothing touches Facebook until it can sign in with your cookies.
+    if (this.fb.ready && !this.fb.ready()) return null;
     while (this.queue.length) {
       const w = this.store.getWatch(this.queue.shift());
       if (w) return { watch: w, manual: true };
@@ -320,6 +325,7 @@ export class Monitor extends EventEmitter {
         l.aiError = 'Daily AI check limit reached';
       }
     }
+    if (this.stopped) return ev; // shutting down: leave it for next time
     l.deepCheckedAt = Date.now();
     this.keepIfDeal(l, watch, { afterCloserLook: true });
     this.store.save();
@@ -345,8 +351,9 @@ export class Monitor extends EventEmitter {
   async scan(watch, { manual = false } = {}) {
     this.current = watch.id;
     this.emitStatus();
-    const url = buildSearchUrl(watch, this.fbBase);
-    const res = await this.fb.search(url, { hadLocation: Boolean(watch.location) });
+    const area = this.store.settings.area;
+    const url = buildSearchUrl(watch, this.fbBase, area);
+    const res = await this.fb.search(url, { hadLocation: Boolean(watch.location || area?.location) });
     const now = Date.now();
     const intervalMs = clamp(watch.intervalSec || 180, 60, 3600) * 1000;
 
@@ -360,13 +367,13 @@ export class Monitor extends EventEmitter {
       if (res.code === 'RATE_LIMITED') {
         this.rateLimitStreak++;
         this.setCooldown(Math.min(20 * 60e3 * 2 ** (this.rateLimitStreak - 1), 2 * 3600e3), res.message);
-      } else if (['LOGIN_REQUIRED', 'CHECKPOINT', 'NO_BROWSER', 'INELIGIBLE'].includes(res.code)) {
+      } else if (['LOGIN_REQUIRED', 'CHECKPOINT', 'INELIGIBLE'].includes(res.code)) {
         this.setCooldown(10 * 60e3, res.message);
       }
       if (res.code !== 'EMPTY' && res.code !== 'NETWORK' && res.code !== 'BAD_LOCATION') {
         this.problem = { code: res.code, message: res.message, at: now };
       }
-      this.addLog({ at: now, watchId: watch.id, watch: watch.name, engine: res.engine, fallbackFrom: res.fallbackFrom || null, code: res.code, message: res.message, ms: res.ms, found: 0, fresh: 0, manual, url });
+      this.addLog({ at: now, watchId: watch.id, watch: watch.name, engine: res.engine, code: res.code, message: res.message, ms: res.ms, found: 0, fresh: 0, manual, url });
       this.store.save();
       this.emit('watch', watch);
       return;
@@ -378,6 +385,9 @@ export class Monitor extends EventEmitter {
     this.problem = null;
     watch.failCount = 0;
 
+    // Your state, filled in from the results in your area (you can change it in Settings).
+    if (!watch.location) this.learnHomeState(res.listings);
+
     // Page 1 first, and its alerts go out right away.
     const firstScan = !watch.baselineAt;
     const batch = this.ingest(watch, res.listings, { firstScan, now });
@@ -386,8 +396,8 @@ export class Monitor extends EventEmitter {
     watch.scanCount = (watch.scanCount || 0) + 1;
     watch.foundCount = (watch.foundCount || 0) + (firstScan ? 0 : batch.fresh.length);
     watch.nextScanAt = now + jitter(intervalMs, 0.2);
-    watch.lastStatus = { ok: true, code: 'OK', message: res.message, engine: res.engine, at: now, ms: res.ms, results: res.listings.length, pages: 1, fresh: batch.fresh.length, deals: batch.deals };
-    this.addLog({ at: now, watchId: watch.id, watch: watch.name, engine: res.engine, fallbackFrom: res.fallbackFrom || null, code: 'OK', message: res.message, ms: res.ms, found: res.listings.length, pages: 1, fresh: batch.fresh.length, deals: batch.deals, closer: batch.closer, alerts: batch.freshNow.length, manual, url });
+    watch.lastStatus = { ok: true, code: 'OK', message: res.message, engine: res.engine, at: now, ms: res.ms, results: res.listings.length, pages: 1, fresh: batch.fresh.length, deals: batch.deals, notLocal: batch.notLocal };
+    this.addLog({ at: now, watchId: watch.id, watch: watch.name, engine: res.engine, code: 'OK', message: res.message, ms: res.ms, found: res.listings.length, pages: 1, fresh: batch.fresh.length, deals: batch.deals, notLocal: batch.notLocal, closer: batch.closer, alerts: batch.freshNow.length, manual, url });
     this.store.save();
     this.announce(watch, batch);
 
@@ -402,10 +412,16 @@ export class Monitor extends EventEmitter {
    */
   ingest(watch, items, { firstScan, now }) {
     const settings = this.store.settings;
+    const area = this.areaFor(watch);
     const fresh = [];
     const drops = [];
+    let skipped = 0; // not local: ship-only, or outside your area
     for (const item of items) {
       if (item.sold || item.pending || item.hiddenOnFb || item.live === false) continue;
+      if (notLocal(item, area)) {
+        skipped++;
+        continue;
+      }
       const existing = this.store.listings[item.id];
       if (existing) {
         existing.lastSeenAt = now;
@@ -478,7 +494,47 @@ export class Monitor extends EventEmitter {
     for (const l of [...fresh, ...drops]) this.keepIfDeal(l, watch);
     const dropAlerts =
       watch.mute || watch.alertDrops === false ? [] : drops.filter((l) => watch.alertMode === 'all' || pileOf(l) === 'deals');
-    return { fresh, drops, freshNow, dropAlerts, closer, deals: fresh.filter((l) => pileOf(l) === 'deals').length };
+    return { fresh, drops, freshNow, dropAlerts, closer, deals: fresh.filter((l) => pileOf(l) === 'deals').length, notLocal: skipped };
+  }
+
+  /** Fill in "only these states" once, from the state nearly all your local results are in. */
+  learnHomeState(listings) {
+    const area = this.store.settings.area;
+    if (!area || !area.autoStates || area.states?.length) return;
+    const st = homeState(listings);
+    if (!st) return;
+    area.states = [st];
+    this.store.save();
+    this.emit('settings');
+  }
+
+  /**
+   * What counts as local for a watch: your area's rules. A watch that searches
+   * a place of its own isn't held to your state(s), only to local pickup.
+   */
+  areaFor(watch) {
+    const area = this.store.settings.area;
+    return watch?.location ? { ...area, states: [] } : area;
+  }
+
+  /** Your area changed: hide stored listings that aren't local. Ones you starred yourself stay. */
+  applyArea() {
+    const watches = new Map(this.store.watches.map((w) => [w.id, w]));
+    let n = 0;
+    for (const l of Object.values(this.store.listings)) {
+      if (l.hidden || (l.saved && !l.autoSaved)) continue;
+      // Local for any of its watches is local enough.
+      const whys = (l.watchIds?.length ? l.watchIds : [null]).map((id) => notLocal(l, this.areaFor(watches.get(id))));
+      const why = whys.every(Boolean) ? whys[0] : null;
+      if (why) {
+        l.hidden = true;
+        l.hiddenWhy = why;
+        if (l.autoSaved) l.saved = l.autoSaved = false;
+        n++;
+      }
+    }
+    if (n) this.store.save();
+    return n;
   }
 
   /** Tell the dashboard about a batch, and send its alerts. */
@@ -500,7 +556,7 @@ export class Monitor extends EventEmitter {
    * Returns null for "not this time".
    */
   morePlan(watch, res, batch, { firstScan, manual, now }) {
-    const maxPages = clamp(Math.round(this.store.settings.searchPages || 1), 1, 10);
+    const maxPages = clamp(Math.round(this.store.settings.searchPages || 1), 1, 50);
     if (maxPages <= 1 || this.stopped || !this.fb.searchMore) return null;
     if (res.hasMore === false) return null; // Facebook says that was everything
     if (res.hasMore == null && res.listings.length < FULL_PAGE) return null; // a short page has nothing below it
@@ -523,7 +579,7 @@ export class Monitor extends EventEmitter {
   /** Read past page 1 (scrolling in the background browser) and add what turns up. */
   async readMore(watch, url, plan, { firstScan, manual }) {
     const res = await this.fb.searchMore(url, {
-      hadLocation: Boolean(watch.location),
+      hadLocation: Boolean(watch.location || this.store.settings.area?.location),
       maxPages: plan.maxPages,
       isNew: (id) => !this.store.listings[id],
       // "As far as allowed" keeps going while pages have listings; otherwise
@@ -534,13 +590,16 @@ export class Monitor extends EventEmitter {
     if (!this.store.getWatch(watch.id) || this.stopped) return;
     const base = { at: now, watchId: watch.id, watch: watch.name, engine: res.engine, ms: res.ms, more: true, reason: plan.reason, manual, url };
     if (!res.ok) {
-      // Page 1 worked, so this isn't a failed check. The watch says "first page only" until
-      // reading more works again. No browser (or Fast only mode) is a quick local check, so
-      // it's simply asked again next time; Facebook trouble waits a while before a retry.
+      // Page 1 worked, so this isn't a failed check. The watch says "first page only"
+      // until following the cursor works again, which is tried again in a while.
       watch.moreProblem = res.message;
-      if (res.code !== 'NO_BROWSER') {
+      if (res.code !== 'NO_COOKIES') {
         watch.morePausedUntil = now + MORE_RETRY_MS;
         this.addLog({ ...base, code: res.code, message: `Couldn't read past the first page: ${res.message}`, found: 0, fresh: 0 });
+      }
+      if (res.code === 'RATE_LIMITED') {
+        this.rateLimitStreak++;
+        this.setCooldown(Math.min(20 * 60e3 * 2 ** (this.rateLimitStreak - 1), 2 * 3600e3), res.message);
       }
       this.store.save();
       this.emit('watch', watch);
@@ -548,19 +607,21 @@ export class Monitor extends EventEmitter {
     }
     const batch = this.ingest(watch, res.listings, { firstScan, now });
     const pages = res.pages || Math.max(1, Math.ceil(res.listings.length / 24));
+    const total = res.total ?? res.listings.length; // results seen across all pages, page 1 included
     const last = watch.lastStatus || {};
     watch.foundCount = (watch.foundCount || 0) + (firstScan ? 0 : batch.fresh.length);
     watch.lastStatus = {
       ...last,
-      results: Math.max(last.results || 0, res.listings.length),
+      results: Math.max(last.results || 0, total),
       pages,
       fresh: (last.fresh || 0) + batch.fresh.length,
       deals: (last.deals || 0) + batch.deals,
+      notLocal: (last.notLocal || 0) + batch.notLocal,
     };
     watch.moreProblem = null;
     watch.lastMoreAt = now; // only a deeper read that worked counts
-    watch.lastMore = { at: now, pages, results: res.listings.length };
-    this.addLog({ ...base, code: 'OK', message: 'More results', found: res.listings.length, pages, fresh: batch.fresh.length, deals: batch.deals, closer: batch.closer, alerts: batch.freshNow.length });
+    watch.lastMore = { at: now, pages, results: total, toEnd: res.hasMore === false, how: res.how || null };
+    this.addLog({ ...base, code: 'OK', message: 'More results', found: total, pages, toEnd: res.hasMore === false, how: res.how || null, fresh: batch.fresh.length, deals: batch.deals, notLocal: batch.notLocal, closer: batch.closer, alerts: batch.freshNow.length });
     this.store.save();
     this.announce(watch, batch);
   }
